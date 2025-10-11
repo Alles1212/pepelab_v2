@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MedSSI 病歷授權與領藥原型 v2</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#step-holder">直接前往錢包操作</a>
+    <header>
+      <h1>MedSSI 病歷授權與領藥原型 v2</h1>
+      <p>
+        透過 MyData / 健保卡的身份保證等級（IAL）與 FHIR 結構化病歷，示範發行端、病患錢包與驗證端如何執行選擇性揭露與領藥流程。
+        介面採用大字體與分步驟指引，方便長者或陪同家屬操作。
+      </p>
+    </header>
+
+    <main>
+      <section class="step" id="step-issuer">
+        <div class="step-label">Step 1</div>
+        <h2>發行端（醫院）</h2>
+        <p>
+          醫院完成診斷後，可依 FHIR 結構建立 verifiable credential。選擇性揭露依「病歷摘要」與「領藥取件」兩種範疇設定，不需要任何生物辨識。
+        </p>
+        <div class="panel-grid">
+          <article class="panel">
+            <h3>發行含病歷資訊的憑證</h3>
+            <p class="hint">預設欄位符合 FHIR Condition 與 MedicationDispense 結構，可按「載入示例」快速填入。</p>
+            <button type="button" class="ghost" data-fill-sample="issue">載入示例</button>
+            <form id="issue-data-form">
+              <fieldset>
+                <legend>基本資料</legend>
+                <label>
+                  發行者 ID
+                  <input name="issuerId" value="hospital-nhi-001" required />
+                </label>
+                <label>
+                  Holder DID
+                  <input name="holderDid" value="did:example:patient123" required />
+                </label>
+                <label>
+                  IAL 等級
+                  <select name="ial">
+                    <option value="MYDATA_LIGHT">MyData 輕量登入</option>
+                    <option value="NHI_CARD_PIN" selected>健保卡 + PIN</option>
+                    <option value="MOICA_CERT">自然人憑證</option>
+                  </select>
+                </label>
+                <label>
+                  顯示提示（例如病患姓名）
+                  <input name="holderHint" placeholder="王大智" />
+                </label>
+              </fieldset>
+
+              <fieldset>
+                <legend>FHIR Condition（診斷）</legend>
+                <label>
+                  Condition ID
+                  <input name="conditionId" value="cond-20240501" required />
+                </label>
+                <label>
+                  診斷碼系統
+                  <input name="conditionCodeSystem" value="http://hl7.org/fhir/sid/icd-10" required />
+                </label>
+                <label>
+                  診斷碼（ICD-10）
+                  <input name="conditionCode" value="K29.70" required />
+                </label>
+                <label>
+                  診斷說明
+                  <input name="conditionDisplay" value="慢性胃炎" />
+                </label>
+                <label>
+                  紀錄日期
+                  <input type="date" name="recordedDate" required />
+                </label>
+                <label>
+                  就醫事件系統
+                  <input name="encounterSystem" value="urn:oid:2.16.886.101.20003" required />
+                </label>
+                <label>
+                  就醫事件 ID
+                  <input name="encounterId" value="enc-874563" required />
+                </label>
+                <label>
+                  病患識別系統
+                  <input name="subjectSystem" value="urn:tw.gov.mohw:nhiid" required />
+                </label>
+                <label>
+                  病患識別碼
+                  <input name="subjectId" value="A123456789" required />
+                </label>
+              </fieldset>
+
+              <fieldset>
+                <legend>發卡與授權資訊</legend>
+                <label>
+                  診斷摘要雜湊
+                  <input name="encounterHash" value="hash-visit-001" required />
+                </label>
+                <label>
+                  發卡院所系統
+                  <input name="orgSystem" value="urn:tw.gov.mohw:hospital" required />
+                </label>
+                <label>
+                  發卡院所代碼
+                  <input name="orgId" value="1234567890" required />
+                </label>
+                <label>
+                  發卡院所名稱
+                  <input name="orgAssigner" value="臺北綜合醫院" />
+                </label>
+                <label>
+                  發卡日期
+                  <input type="date" name="issuedOn" required />
+                </label>
+                <label>
+                  授權截止日（可選）
+                  <input type="date" name="consentExpires" />
+                </label>
+              </fieldset>
+
+              <fieldset>
+                <legend>領藥資訊（可選）</legend>
+                <label>
+                  MedicationDispense ID
+                  <input name="medicationId" value="disp-001" />
+                </label>
+                <label>
+                  藥品代碼系統
+                  <input name="medicationSystem" value="http://www.whocc.no/atc" />
+                </label>
+                <label>
+                  藥品代碼
+                  <input name="medicationCode" value="A02BC" />
+                </label>
+                <label>
+                  藥品名稱
+                  <input name="medicationDisplay" value="Proton Pump Inhibitor" />
+                </label>
+                <label>
+                  發給數量描述
+                  <input name="medicationQuantity" value="30 錠" />
+                </label>
+                <label>
+                  給藥天數
+                  <input type="number" name="medicationDays" min="1" value="14" />
+                </label>
+                <label>
+                  領藥截止日
+                  <input type="date" name="pickupWindow" />
+                </label>
+                <label>
+                  調劑單位系統
+                  <input name="performerSystem" value="urn:tw.gov.mohw:pharmacy" />
+                </label>
+                <label>
+                  調劑單位代碼
+                  <input name="performerValue" value="pharm-7788" />
+                </label>
+              </fieldset>
+
+              <fieldset data-scope="MEDICAL_RECORD" data-description="跨院病歷摘要">
+                <legend>病歷摘要選擇性揭露欄位</legend>
+                <label>
+                  <input type="checkbox" name="medicalField" value="condition.code.coding[0].code" checked />
+                  ICD-10 診斷碼
+                </label>
+                <label>
+                  <input type="checkbox" name="medicalField" value="condition.recordedDate" checked />
+                  診斷日期
+                </label>
+                <label>
+                  <input type="checkbox" name="medicalField" value="managing_organization.value" checked />
+                  發卡院所代碼
+                </label>
+              </fieldset>
+
+              <fieldset data-scope="MEDICATION_PICKUP" data-description="領藥取件資訊">
+                <legend>領藥資訊選擇性揭露欄位</legend>
+                <label>
+                  <input type="checkbox" name="medicationField" value="medication_dispense[0].medicationCodeableConcept.coding[0].code" checked />
+                  藥品代碼
+                </label>
+                <label>
+                  <input type="checkbox" name="medicationField" value="medication_dispense[0].days_supply" checked />
+                  給藥天數
+                </label>
+                <label>
+                  <input type="checkbox" name="medicationField" value="medication_dispense[0].pickup_window_end" checked />
+                  領藥期限
+                </label>
+              </fieldset>
+
+              <button type="submit">產生含資料 QR Code</button>
+            </form>
+            <pre id="issue-data-response" class="response" aria-live="polite"></pre>
+          </article>
+
+          <article class="panel">
+            <h3>發行空白憑證（先給條碼，後補資料）</h3>
+            <form id="issue-nodata-form">
+              <fieldset>
+                <legend>基本設定</legend>
+                <label>
+                  發行者 ID
+                  <input name="issuerId" value="hospital-nhi-001" required />
+                </label>
+                <label>
+                  IAL 等級
+                  <select name="ial">
+                    <option value="MYDATA_LIGHT">MyData 輕量登入</option>
+                    <option value="NHI_CARD_PIN" selected>健保卡 + PIN</option>
+                    <option value="MOICA_CERT">自然人憑證</option>
+                  </select>
+                </label>
+                <label>
+                  Holder 提示（可選）
+                  <input name="holderHint" placeholder="慢性處方領藥" />
+                </label>
+              </fieldset>
+
+              <fieldset data-scope="MEDICAL_RECORD" data-description="跨院病歷摘要">
+                <legend>病歷摘要欄位</legend>
+                <label>
+                  <input type="checkbox" name="medicalField" value="condition.code.coding[0].code" checked />
+                  ICD-10 診斷碼
+                </label>
+                <label>
+                  <input type="checkbox" name="medicalField" value="condition.recordedDate" checked />
+                  診斷日期
+                </label>
+                <label>
+                  <input type="checkbox" name="medicalField" value="managing_organization.value" checked />
+                  發卡院所代碼
+                </label>
+              </fieldset>
+
+              <fieldset data-scope="MEDICATION_PICKUP" data-description="領藥取件資訊">
+                <legend>領藥欄位</legend>
+                <label>
+                  <input type="checkbox" name="medicationField" value="medication_dispense[0].medicationCodeableConcept.coding[0].code" checked />
+                  藥品代碼
+                </label>
+                <label>
+                  <input type="checkbox" name="medicationField" value="medication_dispense[0].days_supply" checked />
+                  給藥天數
+                </label>
+                <label>
+                  <input type="checkbox" name="medicationField" value="medication_dispense[0].pickup_window_end" checked />
+                  領藥期限
+                </label>
+              </fieldset>
+
+              <button type="submit">產生空白 QR Code</button>
+            </form>
+            <pre id="issue-nodata-response" class="response" aria-live="polite"></pre>
+          </article>
+        </div>
+      </section>
+
+      <section class="step" id="step-holder">
+        <div class="step-label">Step 2</div>
+        <h2>病患錢包</h2>
+        <p>
+          病患掃描 QR Code 後，先取得 nonce 與揭露範圍，再決定是否領取或更新憑證。提供「一鍵遺忘」重置錢包資料。
+        </p>
+        <div class="panel-grid">
+          <article class="panel">
+            <h3>查詢 nonce 與揭露政策</h3>
+            <form id="nonce-form">
+              <label>
+                交易 ID
+                <input name="transactionId" placeholder="txn-..." required />
+              </label>
+              <button type="submit">查詢</button>
+            </form>
+            <pre id="nonce-response" class="response" aria-live="polite"></pre>
+          </article>
+
+          <article class="panel">
+            <h3>接受／拒絕／更新憑證</h3>
+            <p class="hint">如需補上 FHIR JSON，可先按下方示例再依實際狀況調整。</p>
+            <button type="button" class="ghost" data-fill-sample="wallet">載入示例 Payload</button>
+            <form id="credential-action-form">
+              <label>
+                Credential ID
+                <input name="credentialId" placeholder="cred-..." required />
+              </label>
+              <label>
+                動作
+                <select name="action">
+                  <option value="ACCEPT">接受並存入錢包</option>
+                  <option value="DECLINE">拒絕</option>
+                  <option value="REVOKE">撤銷</option>
+                  <option value="UPDATE">更新資料</option>
+                </select>
+              </label>
+              <label>
+                Holder DID（接受時必填）
+                <input name="holderDid" placeholder="did:example:patient123" />
+              </label>
+              <label>
+                Payload JSON
+                <textarea name="payload" rows="12" placeholder='{ "condition": { ... } }'></textarea>
+              </label>
+              <button type="submit">送出</button>
+            </form>
+            <pre id="credential-action-response" class="response" aria-live="polite"></pre>
+          </article>
+
+          <article class="panel">
+            <h3>查看憑證列表</h3>
+            <form id="list-credentials-form">
+              <label>
+                Holder DID
+                <input name="holderDidList" value="did:example:patient123" required />
+              </label>
+              <button type="submit">查詢憑證</button>
+            </form>
+            <pre id="list-credentials-response" class="response" aria-live="polite"></pre>
+          </article>
+
+          <article class="panel accent">
+            <h3>可遺忘權：清除我的資料</h3>
+            <form id="forget-form">
+              <label>
+                Holder DID
+                <input name="holderDidForget" value="did:example:patient123" required />
+              </label>
+              <button type="submit">立即清除</button>
+            </form>
+            <pre id="forget-response" class="response" aria-live="polite"></pre>
+          </article>
+        </div>
+      </section>
+
+      <section class="step" id="step-verifier">
+        <div class="step-label">Step 3</div>
+        <h2>驗證端（研究／領藥單位）</h2>
+        <p>
+          驗證端分為 A. 跨院病歷授權與 B. 領藥取件通知兩條流程，可各自產生 QR Code 並送交 VP。必要時亦可清空 session。
+        </p>
+        <div class="panel-grid">
+          <article class="panel">
+            <h3>A1. 產生病歷授權 QR Code</h3>
+            <form id="verifier-medical-form" data-scope="MEDICAL_RECORD">
+              <label>
+                Verifier ID
+                <input name="verifierId" value="research-lab-tw" required />
+              </label>
+              <label>
+                Verifier 名稱
+                <input name="verifierName" value="臺灣研究室" required />
+              </label>
+              <label>
+                用途說明
+                <input name="purpose" value="胃炎趨勢研究" required />
+              </label>
+              <label>
+                要求 IAL
+                <select name="ial">
+                  <option value="MYDATA_LIGHT">MyData 輕量登入</option>
+                  <option value="NHI_CARD_PIN" selected>健保卡 + PIN</option>
+                  <option value="MOICA_CERT">自然人憑證</option>
+                </select>
+              </label>
+              <fieldset data-scope="MEDICAL_RECORD">
+                <legend>需要的欄位</legend>
+                <label>
+                  <input type="checkbox" name="medicalField" value="condition.code.coding[0].code" checked />
+                  ICD-10 診斷碼
+                </label>
+                <label>
+                  <input type="checkbox" name="medicalField" value="condition.recordedDate" checked />
+                  診斷日期
+                </label>
+                <label>
+                  <input type="checkbox" name="medicalField" value="managing_organization.value" />
+                  發卡院所代碼
+                </label>
+              </fieldset>
+              <button type="submit">取得 QR Code</button>
+            </form>
+            <pre id="verifier-medical-response" class="response" aria-live="polite"></pre>
+          </article>
+
+          <article class="panel">
+            <h3>A2. 送出病歷 VP</h3>
+            <button type="button" class="ghost" data-fill-sample="presentation-medical">從示例填入</button>
+            <form id="presentation-medical-form" data-scope="MEDICAL_RECORD">
+              <label>
+                Session ID
+                <input name="sessionId" placeholder="sess-..." required />
+              </label>
+              <label>
+                Credential ID
+                <input name="credentialId" placeholder="cred-..." required />
+              </label>
+              <label>
+                Holder DID
+                <input name="holderDid" value="did:example:patient123" required />
+              </label>
+              <div class="grid">
+                <label>
+                  ICD-10 診斷碼
+                  <input name="field-condition.code.coding[0].code" value="K29.70" required />
+                </label>
+                <label>
+                  診斷日期
+                  <input type="date" name="field-condition.recordedDate" required />
+                </label>
+                <label>
+                  發卡院所代碼
+                  <input name="field-managing_organization.value" value="1234567890" required />
+                </label>
+              </div>
+              <button type="submit">送出病歷 VP</button>
+            </form>
+            <pre id="presentation-medical-response" class="response" aria-live="polite"></pre>
+          </article>
+
+          <article class="panel">
+            <h3>B1. 產生領藥 QR Code</h3>
+            <form id="verifier-medication-form" data-scope="MEDICATION_PICKUP">
+              <label>
+                Verifier ID
+                <input name="verifierId" value="pharmacy-network" required />
+              </label>
+              <label>
+                Verifier 名稱
+                <input name="verifierName" value="社區藥局聯盟" required />
+              </label>
+              <label>
+                用途說明
+                <input name="purpose" value="慢性處方領藥" required />
+              </label>
+              <label>
+                要求 IAL
+                <select name="ial">
+                  <option value="MYDATA_LIGHT">MyData 輕量登入</option>
+                  <option value="NHI_CARD_PIN" selected>健保卡 + PIN</option>
+                  <option value="MOICA_CERT">自然人憑證</option>
+                </select>
+              </label>
+              <fieldset data-scope="MEDICATION_PICKUP">
+                <legend>需要的欄位</legend>
+                <label>
+                  <input type="checkbox" name="medicationField" value="medication_dispense[0].medicationCodeableConcept.coding[0].code" checked />
+                  藥品代碼
+                </label>
+                <label>
+                  <input type="checkbox" name="medicationField" value="medication_dispense[0].days_supply" checked />
+                  給藥天數
+                </label>
+                <label>
+                  <input type="checkbox" name="medicationField" value="medication_dispense[0].pickup_window_end" checked />
+                  領藥期限
+                </label>
+              </fieldset>
+              <button type="submit">取得 QR Code</button>
+            </form>
+            <pre id="verifier-medication-response" class="response" aria-live="polite"></pre>
+          </article>
+
+          <article class="panel">
+            <h3>B2. 送出領藥 VP</h3>
+            <button type="button" class="ghost" data-fill-sample="presentation-medication">從示例填入</button>
+            <form id="presentation-medication-form" data-scope="MEDICATION_PICKUP">
+              <label>
+                Session ID
+                <input name="sessionId" placeholder="sess-..." required />
+              </label>
+              <label>
+                Credential ID
+                <input name="credentialId" placeholder="cred-..." required />
+              </label>
+              <label>
+                Holder DID
+                <input name="holderDid" value="did:example:patient123" required />
+              </label>
+              <div class="grid">
+                <label>
+                  藥品代碼
+                  <input name="field-medication_dispense[0].medicationCodeableConcept.coding[0].code" value="A02BC" required />
+                </label>
+                <label>
+                  給藥天數
+                  <input type="number" name="field-medication_dispense[0].days_supply" value="14" min="1" required />
+                </label>
+                <label>
+                  領藥期限
+                  <input type="date" name="field-medication_dispense[0].pickup_window_end" required />
+                </label>
+              </div>
+              <button type="submit">送出領藥 VP</button>
+            </form>
+            <pre id="presentation-medication-response" class="response" aria-live="polite"></pre>
+          </article>
+
+          <article class="panel">
+            <h3>清除驗證 Session</h3>
+            <form id="purge-session-form">
+              <label>
+                Session ID
+                <input name="sessionId" placeholder="sess-..." required />
+              </label>
+              <button type="submit">清除 session</button>
+            </form>
+            <pre id="purge-session-response" class="response" aria-live="polite"></pre>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        本原型僅用於展示流程。實際部署時需整合 Trust Registry、MyData API 以及醫療法規審查，並於生產環境採用持久化儲存與稽核機制。
+      </p>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>
