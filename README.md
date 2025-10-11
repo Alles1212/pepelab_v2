@@ -7,6 +7,7 @@
 - **病歷授權與領藥流程完全分流**：後端以 `DisclosureScope`（`MEDICAL_RECORD`、`MEDICATION_PICKUP`）區分流程，前端用大字體與按鈕導覽兩條路徑。
 - **可遺忘權與 Session 清除**：錢包可呼叫 `/api/wallet/{holder_did}/forget` 一鍵清除持有資料，驗證端可刪除 session。
 - **長者友善介面**：採分步驟面板、示例按鈕、自動填入日期、ARIA live 區域，降低操作複雜度並方便陪同家屬示範。
+- **Access Token 與 5 分鐘 QR 有效期**：所有發行端／驗證端 API 需附帶 `Authorization: Bearer <token>`，並強制 5 分鐘內使用 QR code。
 
 ## 系統架構
 ```
@@ -39,6 +40,8 @@ Issuer (Hospital) ──QR──> Wallet (Patient) ──VP──> Verifier (Res
 | `POST` | `/api/did/vp/result` | 接收 VP，驗證 scope、欄位與 FHIR 值後回傳 AI insight。 |
 | `DELETE` | `/api/did/vp/session/{session_id}` | 清除驗證 session 及其結果。 |
 
+> ℹ️ 發行端端點需附帶 `Authorization: Bearer issuer-sandbox-token`（可用環境變數 `MEDSSI_ISSUER_TOKEN` 覆寫）；驗證端端點則使用 `Authorization: Bearer verifier-sandbox-token`。
+
 ## 快速操作
 1. **啟動後端**
    ```bash
@@ -50,9 +53,16 @@ Issuer (Hospital) ──QR──> Wallet (Patient) ──VP──> Verifier (Res
 3. **建議 demo 流程**
    1. 在 Step 1 按「載入示例」，使用預設的 FHIR Condition 與 MedicationDispense，送出「含資料」發卡。
    2. Step 2 先輸入 `transaction_id` 取得 nonce，按「載入示例 Payload」再執行 `ACCEPT` 將憑證綁定到錢包。
-   3. Step 3A 產生病歷授權 QR Code，照示例填入 VP（診斷碼、紀錄日期、院所代碼）送出，觀察 AI 風險指標。
+   3. Step 3A 先於驗證端面板輸入 Access Token，再產生病歷授權 QR Code，照示例填入 VP（診斷碼、紀錄日期、院所代碼）送出，觀察 AI 風險指標。
    4. Step 3B 產生領藥 QR Code，送出藥品代碼、給藥天數與領藥期限，可示範提醒視窗。
    5. 回到 Step 2 使用「清除我的資料」，驗證可遺忘權會移除憑證、VP 與結果。
+
+## 安全性對齊重點
+- **Bearer Access Token**：模擬數位發展部沙盒流程，需先在 Swagger Authorize 中輸入發行端或驗證端 Access Token 才能呼叫對應 API，可透過環境變數替換預設值。
+- **TLS 與速率限制建議**：原型以 FastAPI 本地執行；實務部署時應透過 API Gateway 提供 TLS 1.3、每小時 3600 次限流與異常偵測。
+- **QR 有效 5 分鐘**：Credential offer 與 verification session 均限定 5 分鐘內使用，逾時需重新產生，以符合沙盒規範。
+- **UUIDv4 交易序號**：`transaction_id` 採標準 UUIDv4，方便稽核與跨系統追蹤。
+- **稽核與清除機制**：保留遺忘權、session purge 與撤銷 API，示範異常處理與資料清除流程。
 
 ## 延伸與實務考量
 - **Trust Registry**：可在 `get_verification_code` 之前檢查 verifier 是否於政府註冊。

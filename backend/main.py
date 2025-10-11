@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import os
 import secrets
 import uuid
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from .analytics import get_risk_engine
@@ -30,7 +31,29 @@ from .models import (
 )
 from .store import store
 
-app = FastAPI(title="MedSSI Sandbox APIs", version="0.4.0")
+app = FastAPI(title="MedSSI Sandbox APIs", version="0.5.0")
+
+
+ISSUER_ACCESS_TOKEN = os.getenv("MEDSSI_ISSUER_TOKEN", "issuer-sandbox-token")
+VERIFIER_ACCESS_TOKEN = os.getenv("MEDSSI_VERIFIER_TOKEN", "verifier-sandbox-token")
+
+
+def _validate_token(authorization: Optional[str], expected: str, audience: str) -> None:
+    if not authorization:
+        raise HTTPException(status_code=401, detail=f"Missing {audience} access token")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(status_code=401, detail="Access token must use Bearer scheme")
+    if token != expected:
+        raise HTTPException(status_code=403, detail=f"{audience.capitalize()} access token rejected")
+
+
+def require_issuer_token(authorization: Optional[str] = Header(None)) -> None:
+    _validate_token(authorization, ISSUER_ACCESS_TOKEN, "issuer")
+
+
+def require_verifier_token(authorization: Optional[str] = Header(None)) -> None:
+    _validate_token(authorization, VERIFIER_ACCESS_TOKEN, "verifier")
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +68,7 @@ class IssuanceWithDataRequest(BaseModel):
         default_factory=lambda: _default_disclosure_policies(),
         description="Selective disclosure rules grouped by scope",
     )
-    valid_for_minutes: int = Field(15, ge=1, le=1440)
+    valid_for_minutes: int = Field(5, ge=1, le=5)
     holder_hint: Optional[str] = Field(
         None, description="Optional hint shown to the wallet (e.g. patient name)"
     )
@@ -55,7 +78,7 @@ class IssuanceWithoutDataRequest(BaseModel):
     issuer_id: str
     ial: IdentityAssuranceLevel
     disclosure_policies: List[DisclosurePolicy]
-    valid_for_minutes: int = Field(15, ge=1, le=1440)
+    valid_for_minutes: int = Field(5, ge=1, le=5)
     holder_hint: Optional[str] = None
     holder_did: Optional[str] = None
     payload_template: Optional[CredentialPayload] = Field(
@@ -123,7 +146,7 @@ def _create_offer(
 ) -> CredentialOffer:
     now = datetime.utcnow()
     credential_id = f"cred-{uuid.uuid4().hex}"
-    transaction_id = f"txn-{uuid.uuid4().hex}"
+    transaction_id = str(uuid.uuid4())
     nonce = secrets.token_urlsafe(16)
     qr_token = secrets.token_urlsafe(24)
 
@@ -203,7 +226,11 @@ def _resolve_payload_value(payload: Optional[CredentialPayload], path: str) -> O
     return None
 
 
-@app.post("/api/qrcode/data", response_model=QRCodeResponse)
+@app.post(
+    "/api/qrcode/data",
+    response_model=QRCodeResponse,
+    dependencies=[Depends(require_issuer_token)],
+)
 def create_qr_with_data(request: IssuanceWithDataRequest) -> QRCodeResponse:
     _ensure_valid_policies(request.disclosure_policies)
 
@@ -222,7 +249,11 @@ def create_qr_with_data(request: IssuanceWithDataRequest) -> QRCodeResponse:
     return QRCodeResponse(credential=offer, qr_payload=qr_payload)
 
 
-@app.post("/api/qrcode/nodata", response_model=QRCodeResponse)
+@app.post(
+    "/api/qrcode/nodata",
+    response_model=QRCodeResponse,
+    dependencies=[Depends(require_issuer_token)],
+)
 def create_qr_without_data(request: IssuanceWithoutDataRequest) -> QRCodeResponse:
     _ensure_valid_policies(request.disclosure_policies)
 
@@ -243,6 +274,11 @@ def create_qr_without_data(request: IssuanceWithoutDataRequest) -> QRCodeRespons
 
 @app.get("/api/credential/nonce", response_model=NonceResponse)
 def get_nonce(transactionId: str = Query(..., alias="transactionId")) -> NonceResponse:  # noqa: N802
+    try:
+        uuid.UUID(transactionId)
+    except ValueError as exc:  # pragma: no cover - defensive parsing
+        raise HTTPException(status_code=400, detail="transactionId must be a UUID") from exc
+
     offer = store.get_credential_by_transaction(transactionId)
     if not offer:
         raise HTTPException(status_code=404, detail="Unknown transaction id")
@@ -307,7 +343,11 @@ class VerificationSubmission(BaseModel):
     disclosed_fields: Dict[str, str]
 
 
-@app.get("/api/did/vp/code", response_model=VerificationCodeResponse)
+@app.get(
+    "/api/did/vp/code",
+    response_model=VerificationCodeResponse,
+    dependencies=[Depends(require_verifier_token)],
+)
 def get_verification_code(
     verifier_id: str = Query(..., description="Verifier identifier registered in the trust registry"),
     verifier_name: str = Query(..., description="Display name for the verifier"),
@@ -318,7 +358,7 @@ def get_verification_code(
         None,
         description="Comma separated list of selective disclosure fields; defaults depend on scope",
     ),
-    valid_for_minutes: int = Query(30, ge=1, le=1440, alias="validMinutes"),
+    valid_for_minutes: int = Query(5, ge=1, le=5, alias="validMinutes"),
 ) -> VerificationCodeResponse:
     if fields:
         allowed_fields = [f.strip() for f in fields.split(",") if f.strip()]
@@ -364,7 +404,11 @@ def get_verification_code(
     return VerificationCodeResponse(session=session, qr_payload=qr_payload)
 
 
-@app.post("/api/did/vp/result", response_model=RiskInsightResponse)
+@app.post(
+    "/api/did/vp/result",
+    response_model=RiskInsightResponse,
+    dependencies=[Depends(require_verifier_token)],
+)
 def submit_presentation(payload: VerificationSubmission) -> RiskInsightResponse:
     session = store.get_verification_session(payload.session_id)
     if not session or not session.is_active():
@@ -441,7 +485,11 @@ def list_holder_credentials(holder_did: str) -> List[CredentialOffer]:
     return store.list_credentials_for_holder(holder_did)
 
 
-@app.post("/api/credentials/{credential_id}/revoke", response_model=CredentialOffer)
+@app.post(
+    "/api/credentials/{credential_id}/revoke",
+    response_model=CredentialOffer,
+    dependencies=[Depends(require_issuer_token)],
+)
 def revoke_credential(credential_id: str) -> CredentialOffer:
     credential = store.get_credential(credential_id)
     if not credential:
@@ -452,7 +500,10 @@ def revoke_credential(credential_id: str) -> CredentialOffer:
     return credential
 
 
-@app.delete("/api/credentials/{credential_id}")
+@app.delete(
+    "/api/credentials/{credential_id}",
+    dependencies=[Depends(require_issuer_token)],
+)
 def delete_credential(credential_id: str) -> Dict[str, str]:
     credential = store.get_credential(credential_id)
     if not credential:
@@ -466,7 +517,10 @@ def forget_holder(holder_did: str) -> ForgetSummary:
     return store.forget_holder(holder_did)
 
 
-@app.delete("/api/did/vp/session/{session_id}")
+@app.delete(
+    "/api/did/vp/session/{session_id}",
+    dependencies=[Depends(require_verifier_token)],
+)
 def purge_verification_session(session_id: str) -> Dict[str, str]:
     session = store.get_verification_session(session_id)
     if not session:

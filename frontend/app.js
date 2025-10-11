@@ -3,6 +3,41 @@ const API_BASE =
     ? 'http://localhost:8000'
     : window.location.origin;
 
+const STORAGE_AVAILABLE = (() => {
+  try {
+    const key = '__medssi_storage_test__';
+    window.localStorage.setItem(key, '1');
+    window.localStorage.removeItem(key);
+    return true;
+  } catch (error) {
+    return false;
+  }
+})();
+
+const TOKEN_STORAGE_KEYS = {
+  issuer: 'medssiIssuerToken',
+  verifier: 'medssiVerifierToken',
+};
+
+function loadToken(role, fallback) {
+  if (STORAGE_AVAILABLE) {
+    const stored = window.localStorage.getItem(TOKEN_STORAGE_KEYS[role]);
+    if (stored) return stored;
+  }
+  return fallback;
+}
+
+function persistToken(role, value) {
+  if (STORAGE_AVAILABLE) {
+    window.localStorage.setItem(TOKEN_STORAGE_KEYS[role], value);
+  }
+}
+
+const tokens = {
+  issuer: loadToken('issuer', 'issuer-sandbox-token'),
+  verifier: loadToken('verifier', 'verifier-sandbox-token'),
+};
+
 const today = new Date();
 const iso = (date) => date.toISOString().split('T')[0];
 const plusDays = (date, days) => {
@@ -23,6 +58,8 @@ const setIfExists = (selector, value) => {
   }
 };
 
+setIfExists('#issuer-token-form input[name="issuerToken"]', tokens.issuer);
+setIfExists('#verifier-token-form input[name="verifierToken"]', tokens.verifier);
 setIfExists('input[name="recordedDate"]', defaultRecordedDate);
 setIfExists('input[name="issuedOn"]', defaultIssuedOn);
 setIfExists('input[name="consentExpires"]', defaultConsent);
@@ -31,10 +68,15 @@ setIfExists('#presentation-medical-form input[name="field-condition.recordedDate
 setIfExists('#presentation-medication-form input[name="field-medication_dispense[0].pickup_window_end"]', defaultPickup);
 
 async function requestJson(url, options = {}) {
-  const response = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options,
-  });
+  const { accessToken, headers: customHeaders, ...rest } = options;
+  const headers = { ...(customHeaders || {}) };
+  if (rest.body !== undefined && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+  const response = await fetch(url, { ...rest, headers });
   const text = await response.text();
   let data;
   try {
@@ -69,6 +111,31 @@ function bindForm(formId, handler) {
     } finally {
       if (submitButton) submitButton.textContent = original || '送出';
     }
+  });
+}
+
+function bindTokenForm(formId, role, statusId) {
+  const form = document.getElementById(formId);
+  if (!form) return;
+  const input = form.querySelector('input[type="password"]');
+  const status = statusId ? document.getElementById(statusId) : null;
+  const stored =
+    STORAGE_AVAILABLE && window.localStorage.getItem(TOKEN_STORAGE_KEYS[role]) ? true : false;
+  if (status) {
+    status.textContent = stored ? '已載入儲存的 Token。' : '使用預設 Token。';
+  }
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!input) return;
+    const value = input.value.trim();
+    if (!value) {
+      if (status) status.textContent = 'Token 不可為空值。';
+      input.focus();
+      return;
+    }
+    tokens[role] = value;
+    persistToken(role, value);
+    if (status) status.textContent = 'Token 已更新並儲存。';
   });
 }
 
@@ -240,6 +307,9 @@ function populatePresentationSample(scope) {
   }
 }
 
+bindTokenForm('issuer-token-form', 'issuer', 'issuer-token-status');
+bindTokenForm('verifier-token-form', 'verifier', 'verifier-token-status');
+
 bindForm('issue-data-form', async (formData, form) => {
   const disclosurePolicies = gatherPolicies(form);
   if (!disclosurePolicies.length) {
@@ -259,6 +329,7 @@ bindForm('issue-data-form', async (formData, form) => {
     const data = await requestJson(`${API_BASE}/api/qrcode/data`, {
       method: 'POST',
       body: JSON.stringify(requestPayload),
+      accessToken: tokens.issuer,
     });
     renderJson('issue-data-response', data);
   } catch (error) {
@@ -282,6 +353,7 @@ bindForm('issue-nodata-form', async (formData, form) => {
     const data = await requestJson(`${API_BASE}/api/qrcode/nodata`, {
       method: 'POST',
       body: JSON.stringify(requestPayload),
+      accessToken: tokens.issuer,
     });
     renderJson('issue-nodata-response', data);
   } catch (error) {
@@ -370,7 +442,9 @@ bindForm('verifier-medical-form', async (formData, form) => {
     params.set('fields', fields.join(','));
   }
   try {
-    const data = await requestJson(`${API_BASE}/api/did/vp/code?${params.toString()}`);
+    const data = await requestJson(`${API_BASE}/api/did/vp/code?${params.toString()}`, {
+      accessToken: tokens.verifier,
+    });
     renderJson('verifier-medical-response', data);
   } catch (error) {
     renderJson('verifier-medical-response', error);
@@ -391,7 +465,9 @@ bindForm('verifier-medication-form', async (formData, form) => {
     params.set('fields', fields.join(','));
   }
   try {
-    const data = await requestJson(`${API_BASE}/api/did/vp/code?${params.toString()}`);
+    const data = await requestJson(`${API_BASE}/api/did/vp/code?${params.toString()}`, {
+      accessToken: tokens.verifier,
+    });
     renderJson('verifier-medication-response', data);
   } catch (error) {
     renderJson('verifier-medication-response', error);
@@ -411,6 +487,7 @@ bindForm('presentation-medical-form', async (formData, form) => {
         scope,
         disclosed_fields: disclosedFields,
       }),
+      accessToken: tokens.verifier,
     });
     renderJson('presentation-medical-response', data);
   } catch (error) {
@@ -431,6 +508,7 @@ bindForm('presentation-medication-form', async (formData, form) => {
         scope,
         disclosed_fields: disclosedFields,
       }),
+      accessToken: tokens.verifier,
     });
     renderJson('presentation-medication-response', data);
   } catch (error) {
@@ -443,7 +521,7 @@ bindForm('purge-session-form', async (formData) => {
   try {
     const data = await requestJson(
       `${API_BASE}/api/did/vp/session/${encodeURIComponent(sessionId)}`,
-      { method: 'DELETE' }
+      { method: 'DELETE', accessToken: tokens.verifier }
     );
     renderJson('purge-session-response', data);
   } catch (error) {

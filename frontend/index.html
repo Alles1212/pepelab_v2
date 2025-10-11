@@ -24,6 +24,20 @@
           醫院完成診斷後，可依 FHIR 結構建立 verifiable credential。選擇性揭露依「病歷摘要」與「領藥取件」兩種範疇設定，不需要任何生物辨識。
         </p>
         <div class="panel-grid">
+          <article class="panel accent">
+            <h3>沙盒 Access Token</h3>
+            <p class="hint">依數位發展部沙盒流程，發卡 API 需使用 Access Token，預設值可直接測試。</p>
+            <form id="issuer-token-form">
+              <label>
+                發行端 Access Token
+                <input type="password" name="issuerToken" value="issuer-sandbox-token" required />
+              </label>
+              <button type="submit">儲存 Token</button>
+            </form>
+            <p id="issuer-token-status" class="hint" aria-live="polite"></p>
+            <p class="hint">⚠️ QR code 僅 5 分鐘有效，逾時請重新發行。</p>
+          </article>
+
           <article class="panel">
             <h3>發行含病歷資訊的憑證</h3>
             <p class="hint">預設欄位符合 FHIR Condition 與 MedicationDispense 結構，可按「載入示例」快速填入。</p>
@@ -272,7 +286,11 @@
             <form id="nonce-form">
               <label>
                 交易 ID
-                <input name="transactionId" placeholder="txn-..." required />
+                <input
+                  name="transactionId"
+                  placeholder="123e4567-e89b-12d3-a456-426614174000"
+                  required
+                />
               </label>
               <button type="submit">查詢</button>
             </form>
@@ -343,6 +361,20 @@
           驗證端分為 A. 跨院病歷授權與 B. 領藥取件通知兩條流程，可各自產生 QR Code 並送交 VP。必要時亦可清空 session。
         </p>
         <div class="panel-grid">
+          <article class="panel accent">
+            <h3>驗證端 Access Token</h3>
+            <p class="hint">請先輸入驗證端沙盒 Access Token，才能呼叫 QR code 與驗證結果 API。</p>
+            <form id="verifier-token-form">
+              <label>
+                驗證端 Access Token
+                <input type="password" name="verifierToken" value="verifier-sandbox-token" required />
+              </label>
+              <button type="submit">儲存 Token</button>
+            </form>
+            <p id="verifier-token-status" class="hint" aria-live="polite"></p>
+            <p class="hint">提示：QR Code 同樣 5 分鐘到期，過期請重新產生。</p>
+          </article>
+
           <article class="panel">
             <h3>A1. 產生病歷授權 QR Code</h3>
             <form id="verifier-medical-form" data-scope="MEDICAL_RECORD">
