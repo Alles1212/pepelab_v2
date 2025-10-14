@@ -23,7 +23,7 @@ class IdentityAssuranceLevel(str, Enum):
 IAL_ORDER = {
     IdentityAssuranceLevel.MYDATA_LIGHT: 1,
     IdentityAssuranceLevel.NHI_CARD_PIN: 2,
-    IdentityAssuranceLevel.MOICA_CERT: 3,
+    IdentityAssanceLevel.MOICA_CERT: 3,
 }
 
 
@@ -269,3 +269,10 @@ class ForgetSummary(BaseModel):
     credentials_removed: int
     presentations_removed: int
     verification_results_removed: int
+
+
+class ConsentRecord(BaseModel):
+    consent_id: str
+    holder_did: str
+    verifier_id: str
+    consent_given_at: datetime
