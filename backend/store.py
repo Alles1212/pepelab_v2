@@ -16,6 +16,12 @@ from .models import (
 )
 
 
+class ConsentRecord(BaseModel):
+    consent_id: str
+    holder_did: str
+    verifier_id: str
+    consent_given_at: datetime
+    
 class InMemoryStore:
     """A tiny in-memory store for demo purposes."""
 
