@@ -33,6 +33,9 @@ from .store import store
 
 app = FastAPI(title="MedSSI Sandbox APIs", version="0.5.0")
 
+# ---------------------------------------------------------------------------
+# Access Token Validation
+# ---------------------------------------------------------------------------
 
 ISSUER_ACCESS_TOKEN = os.getenv("MEDSSI_ISSUER_TOKEN", "issuer-sandbox-token")
 VERIFIER_ACCESS_TOKEN = os.getenv("MEDSSI_VERIFIER_TOKEN", "verifier-sandbox-token")
@@ -59,6 +62,7 @@ def require_verifier_token(authorization: Optional[str] = Header(None)) -> None:
 # ---------------------------------------------------------------------------
 # Issuance APIs
 # ---------------------------------------------------------------------------
+
 class IssuanceWithDataRequest(BaseModel):
     issuer_id: str
     holder_did: str
@@ -69,9 +73,7 @@ class IssuanceWithDataRequest(BaseModel):
         description="Selective disclosure rules grouped by scope",
     )
     valid_for_minutes: int = Field(5, ge=1, le=5)
-    holder_hint: Optional[str] = Field(
-        None, description="Optional hint shown to the wallet (e.g. patient name)"
-    )
+    holder_hint: Optional[str] = Field(None, description="Optional hint shown to the wallet (e.g. patient name)")
 
 
 class IssuanceWithoutDataRequest(BaseModel):
@@ -82,8 +84,7 @@ class IssuanceWithoutDataRequest(BaseModel):
     holder_hint: Optional[str] = None
     holder_did: Optional[str] = None
     payload_template: Optional[CredentialPayload] = Field(
-        None,
-        description="Optional template so the wallet knows what data will be requested",
+        None, description="Optional template so the wallet knows what data will be requested",
     )
 
 
@@ -121,16 +122,10 @@ def _ensure_valid_policies(policies: List[DisclosurePolicy]) -> None:
     seen_scopes = set()
     for policy in policies:
         if policy.scope in seen_scopes:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Duplicate disclosure policy for scope {policy.scope}",
-            )
+            raise HTTPException(status_code=400, detail=f"Duplicate disclosure policy for scope {policy.scope}")
         seen_scopes.add(policy.scope)
         if not policy.fields:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Disclosure fields for scope {policy.scope} cannot be empty",
-            )
+            raise HTTPException(status_code=400, detail=f"Disclosure fields for scope {policy.scope} cannot be empty")
 
 
 def _create_offer(
@@ -208,7 +203,7 @@ def _resolve_payload_value(payload: Optional[CredentialPayload], path: str) -> O
                 return None
             current = current[index]
             segment = remainder
-            if segment.startswith('.'):  # Should not happen due to split, but be safe
+            if segment.startswith('.'):
                 segment = segment[1:]
         if segment:
             current = _get_child(current, segment)
@@ -226,11 +221,7 @@ def _resolve_payload_value(payload: Optional[CredentialPayload], path: str) -> O
     return None
 
 
-@app.post(
-    "/api/qrcode/data",
-    response_model=QRCodeResponse,
-    dependencies=[Depends(require_issuer_token)],
-)
+@app.post("/api/qrcode/data", response_model=QRCodeResponse, dependencies=[Depends(require_issuer_token)])
 def create_qr_with_data(request: IssuanceWithDataRequest) -> QRCodeResponse:
     _ensure_valid_policies(request.disclosure_policies)
 
@@ -244,19 +235,13 @@ def create_qr_with_data(request: IssuanceWithDataRequest) -> QRCodeResponse:
         holder_hint=request.holder_hint,
         payload=request.payload,
     )
-
     qr_payload = _build_qr_payload(offer.qr_token, "credential")
     return QRCodeResponse(credential=offer, qr_payload=qr_payload)
 
 
-@app.post(
-    "/api/qrcode/nodata",
-    response_model=QRCodeResponse,
-    dependencies=[Depends(require_issuer_token)],
-)
+@app.post("/api/qrcode/nodata", response_model=QRCodeResponse, dependencies=[Depends(require_issuer_token)])
 def create_qr_without_data(request: IssuanceWithoutDataRequest) -> QRCodeResponse:
     _ensure_valid_policies(request.disclosure_policies)
-
     offer = _create_offer(
         issuer_id=request.issuer_id,
         ial=request.ial,
@@ -267,16 +252,15 @@ def create_qr_without_data(request: IssuanceWithoutDataRequest) -> QRCodeRespons
         holder_hint=request.holder_hint,
         payload=request.payload_template,
     )
-
     qr_payload = _build_qr_payload(offer.qr_token, "credential")
     return QRCodeResponse(credential=offer, qr_payload=qr_payload)
 
 
 @app.get("/api/credential/nonce", response_model=NonceResponse)
-def get_nonce(transactionId: str = Query(..., alias="transactionId")) -> NonceResponse:  # noqa: N802
+def get_nonce(transactionId: str = Query(..., alias="transactionId")) -> NonceResponse:
     try:
         uuid.UUID(transactionId)
-    except ValueError as exc:  # pragma: no cover - defensive parsing
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail="transactionId must be a UUID") from exc
 
     offer = store.get_credential_by_transaction(transactionId)
@@ -322,10 +306,9 @@ def handle_credential_action(credential_id: str, payload: CredentialActionReques
         credential.status = CredentialStatus.DECLINED
     elif payload.action == CredentialAction.REVOKE:
         credential.status = CredentialStatus.REVOKED
-    elif payload.action == CredentialAction.UPDATE:
-        if payload.payload:
-            credential.payload = payload.payload
-    else:  # pragma: no cover - defensive
+    elif payload.action == CredentialAction.UPDATE and payload.payload:
+        credential.payload = payload.payload
+    else:
         raise HTTPException(status_code=400, detail="Unsupported action")
 
     credential.last_action_at = now
@@ -336,6 +319,7 @@ def handle_credential_action(credential_id: str, payload: CredentialActionReques
 # ---------------------------------------------------------------------------
 # Verification APIs
 # ---------------------------------------------------------------------------
+
 class VerificationSubmission(BaseModel):
     session_id: str
     credential_id: str
@@ -344,30 +328,20 @@ class VerificationSubmission(BaseModel):
     disclosed_fields: Dict[str, str]
 
 
-@app.get(
-    "/api/did/vp/code",
-    response_model=VerificationCodeResponse,
-    dependencies=[Depends(require_verifier_token)],
-)
+@app.get("/api/did/vp/code", response_model=VerificationCodeResponse, dependencies=[Depends(require_verifier_token)])
 def get_verification_code(
-    verifier_id: str = Query(..., description="Verifier identifier registered in the trust registry"),
-    verifier_name: str = Query(..., description="Display name for the verifier"),
-    purpose: str = Query("Clinical research", description="Why the verifier needs the data"),
-    ial: IdentityAssuranceLevel = Query(IdentityAssuranceLevel.NHI_CARD_PIN, alias="ial"),
-    scope: DisclosureScope = Query(DisclosureScope.MEDICAL_RECORD, description="MEDICAL_RECORD or MEDICATION_PICKUP"),
-    fields: Optional[str] = Query(
-        None,
-        description="Comma separated list of selective disclosure fields; defaults depend on scope",
-    ),
-    valid_for_minutes: int = Query(5, ge=1, le=5, alias="validMinutes"),
+    verifier_id: str = Query(...),
+    verifier_name: str = Query(...),
+    purpose: str = Query("Clinical research"),
+    ial: IdentityAssuranceLevel = Query(IdentityAssuranceLevel.NHI_CARD_PIN),
+    scope: DisclosureScope = Query(DisclosureScope.MEDICAL_RECORD),
+    fields: Optional[str] = Query(None),
+    valid_for_minutes: int = Query(5, ge=1, le=5),
 ) -> VerificationCodeResponse:
     if fields:
         allowed_fields = [f.strip() for f in fields.split(",") if f.strip()]
     else:
-        policy = next(
-            (policy for policy in _default_disclosure_policies() if policy.scope == scope),
-            None,
-        )
+        policy = next((p for p in _default_disclosure_policies() if p.scope == scope), None)
         allowed_fields = policy.fields if policy else []
 
     if not allowed_fields:
@@ -400,16 +374,13 @@ def get_verification_code(
             expires_at=now + timedelta(minutes=valid_for_minutes),
             last_polled_at=now,
         )
+
     store.persist_verification_session(session)
     qr_payload = _build_qr_payload(session.qr_token, "verification")
     return VerificationCodeResponse(session=session, qr_payload=qr_payload)
 
 
-@app.post(
-    "/api/did/vp/result",
-    response_model=RiskInsightResponse,
-    dependencies=[Depends(require_verifier_token)],
-)
+@app.post("/api/did/vp/result", response_model=RiskInsightResponse, dependencies=[Depends(require_verifier_token)])
 def submit_presentation(payload: VerificationSubmission) -> RiskInsightResponse:
     session = store.get_verification_session(payload.session_id)
     if not session or not session.is_active():
@@ -427,10 +398,7 @@ def submit_presentation(payload: VerificationSubmission) -> RiskInsightResponse:
     if not payload.disclosed_fields:
         raise HTTPException(status_code=400, detail="At least one field must be disclosed")
 
-    policy = next(
-        (policy for policy in credential.disclosure_policies if policy.scope == session.scope),
-        None,
-    )
+    policy = next((p for p in credential.disclosure_policies if p.scope == session.scope), None)
     if not policy:
         raise HTTPException(status_code=400, detail="Credential does not support the requested disclosure scope")
 
@@ -441,17 +409,14 @@ def submit_presentation(payload: VerificationSubmission) -> RiskInsightResponse:
 
     submitted = set(payload.disclosed_fields.keys())
     if not submitted.issubset(allowed):
-        raise HTTPException(status_code=400, detail="Disclosed fields exceed the allowed scope")
+        raise HTTPException(status_code=400, detail="Disclosed fields exceed allowed scope")
     if not credential.payload:
-        raise HTTPException(status_code=400, detail="Credential payload is unavailable for verification")
+        raise HTTPException(status_code=400, detail="Credential payload unavailable")
 
     for field_name, field_value in payload.disclosed_fields.items():
         stored_value = _resolve_payload_value(credential.payload, field_name)
         if stored_value is not None and stored_value != field_value:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Field {field_name} does not match credential payload",
-            )
+            raise HTTPException(status_code=400, detail=f"Field {field_name} does not match credential payload")
 
     presentation = Presentation(
         presentation_id=f"vp-{uuid.uuid4().hex}",
@@ -479,18 +444,15 @@ def submit_presentation(payload: VerificationSubmission) -> RiskInsightResponse:
 
 
 # ---------------------------------------------------------------------------
-# Utility endpoints for demos
+# Utility endpoints
 # ---------------------------------------------------------------------------
+
 @app.get("/api/wallet/{holder_did}/credentials", response_model=List[CredentialOffer])
 def list_holder_credentials(holder_did: str) -> List[CredentialOffer]:
     return store.list_credentials_for_holder(holder_did)
 
 
-@app.post(
-    "/api/credentials/{credential_id}/revoke",
-    response_model=CredentialOffer,
-    dependencies=[Depends(require_issuer_token)],
-)
+@app.post("/api/credentials/{credential_id}/revoke", response_model=CredentialOffer, dependencies=[Depends(require_issuer_token)])
 def revoke_credential(credential_id: str) -> CredentialOffer:
     credential = store.get_credential(credential_id)
     if not credential:
@@ -501,10 +463,7 @@ def revoke_credential(credential_id: str) -> CredentialOffer:
     return credential
 
 
-@app.delete(
-    "/api/credentials/{credential_id}",
-    dependencies=[Depends(require_issuer_token)],
-)
+@app.delete("/api/credentials/{credential_id}", dependencies=[Depends(require_issuer_token)])
 def delete_credential(credential_id: str) -> Dict[str, str]:
     credential = store.get_credential(credential_id)
     if not credential:
@@ -518,10 +477,7 @@ def forget_holder(holder_did: str) -> ForgetSummary:
     return store.forget_holder(holder_did)
 
 
-@app.delete(
-    "/api/did/vp/session/{session_id}",
-    dependencies=[Depends(require_verifier_token)],
-)
+@app.delete("/api/did/vp/session/{session_id}", dependencies=[Depends(require_verifier_token)])
 def purge_verification_session(session_id: str) -> Dict[str, str]:
     session = store.get_verification_session(session_id)
     if not session:
