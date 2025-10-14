@@ -44,7 +44,7 @@ Issuer (Hospital) ──QR──> Wallet (Patient) ──VP──> Verifier (Res
 
 1. 啟動後端：
    ```bash
-python -m uvicorn backend.main:app --reload
+   python -m uvicorn backend.main:app --reload
    ```
 2. 開啟前端：
    ```bash
