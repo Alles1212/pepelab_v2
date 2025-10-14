@@ -124,9 +124,19 @@ main {
   color: var(--muted);
 }
 
+.hint.strong-hint {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
 .panel.accent {
   border-color: var(--accent);
   background: var(--accent-light);
+}
+
+.panel.note {
+  border-color: #c7d7f5;
+  background: #f5f8ff;
 }
 
 form {
@@ -230,6 +240,17 @@ button.ghost:hover {
 .response:empty::before {
   content: "等待操作...";
   color: rgba(226, 232, 240, 0.6);
+}
+
+.plain-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.plain-list li {
+  color: var(--text);
 }
 
 .grid {

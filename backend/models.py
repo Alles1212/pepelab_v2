@@ -4,7 +4,7 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, root_validator
 
 
 class IdentityAssuranceLevel(str, Enum):
@@ -25,6 +25,17 @@ IAL_ORDER = {
     IdentityAssuranceLevel.NHI_CARD_PIN: 2,
     IdentityAssuranceLevel.MOICA_CERT: 3,
 }
+
+
+IAL_DESCRIPTIONS = {
+    IdentityAssuranceLevel.MYDATA_LIGHT: "MyData 行動化驗證（手機門號＋健保卡號）對應 IAL2 遠端實名驗證。",
+    IdentityAssuranceLevel.NHI_CARD_PIN: "健保卡 + PIN 裝置綁定（健保快易通 APP）屬於 IAL2 強度。",
+    IdentityAssuranceLevel.MOICA_CERT: "自然人憑證或醫事人員卡臨櫃核發，相當於 IAL3 高度保證。",
+}
+
+
+def describe_ial(ial: IdentityAssuranceLevel) -> str:
+    return IAL_DESCRIPTIONS[ial]
 
 
 class FHIRCoding(BaseModel):
@@ -119,6 +130,7 @@ class CredentialOffer(BaseModel):
     transaction_id: str
     issuer_id: str
     ial: IdentityAssuranceLevel
+    ial_description: str
     mode: IssuanceMode
     qr_token: str
     nonce: str
@@ -130,6 +142,15 @@ class CredentialOffer(BaseModel):
     holder_did: Optional[str] = None
     holder_hint: Optional[str] = None
     payload: Optional[CredentialPayload] = None
+
+    @root_validator(pre=True)
+    def _ensure_ial_description(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        ial_value = values.get("ial")
+        if ial_value is not None and "ial_description" not in values:
+            if not isinstance(ial_value, IdentityAssuranceLevel):
+                ial_value = IdentityAssuranceLevel(ial_value)
+            values["ial_description"] = describe_ial(ial_value)
+        return values
 
     def is_active(self, as_of: Optional[datetime] = None) -> bool:
         now = as_of or datetime.utcnow()
@@ -148,11 +169,22 @@ class NonceResponse(BaseModel):
     transaction_id: str
     credential_id: str
     nonce: str
+    ial: IdentityAssuranceLevel
+    ial_description: str
     status: CredentialStatus
     expires_at: datetime
     mode: IssuanceMode
     disclosure_policies: List[DisclosurePolicy]
     payload_available: bool
+
+    @root_validator(pre=True)
+    def _ensure_nonce_ial(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        ial_value = values.get("ial")
+        if ial_value is not None and "ial_description" not in values:
+            if not isinstance(ial_value, IdentityAssuranceLevel):
+                ial_value = IdentityAssuranceLevel(ial_value)
+            values["ial_description"] = describe_ial(ial_value)
+        return values
 
 
 class CredentialAction(str, Enum):
@@ -175,12 +207,22 @@ class VerificationSession(BaseModel):
     verifier_name: str
     purpose: str
     required_ial: IdentityAssuranceLevel
+    ial_description: str
     scope: DisclosureScope
     allowed_fields: List[str]
     qr_token: str
     created_at: datetime
     expires_at: datetime
     last_polled_at: datetime
+
+    @root_validator(pre=True)
+    def _ensure_session_ial(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        ial_value = values.get("required_ial")
+        if ial_value is not None and "ial_description" not in values:
+            if not isinstance(ial_value, IdentityAssuranceLevel):
+                ial_value = IdentityAssuranceLevel(ial_value)
+            values["ial_description"] = describe_ial(ial_value)
+        return values
 
     def is_active(self, as_of: Optional[datetime] = None) -> bool:
         now = as_of or datetime.utcnow()

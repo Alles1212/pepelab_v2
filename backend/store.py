@@ -16,12 +16,6 @@ from .models import (
 )
 
 
-class ConsentRecord(BaseModel):
-    consent_id: str
-    holder_did: str
-    verifier_id: str
-    consent_given_at: datetime
-    
 class InMemoryStore:
     """A tiny in-memory store for demo purposes."""
 
@@ -35,7 +29,9 @@ class InMemoryStore:
         self._presentations: Dict[str, Presentation] = {}
         self._results: Dict[str, VerificationResult] = {}
 
-    # Credential lifecycle -------------------------------------------------
+    # ----------------------------------------------------------------------
+    # Credential lifecycle
+    # ----------------------------------------------------------------------
     def persist_credential_offer(self, credential: CredentialOffer) -> None:
         self._credential_offers[credential.credential_id] = credential
         self._transaction_index[credential.transaction_id] = credential.credential_id
@@ -91,7 +87,9 @@ class InMemoryStore:
             del self._credentials[cid]
         return len(removed)
 
-    # Verification session lifecycle --------------------------------------
+    # ----------------------------------------------------------------------
+    # Verification session lifecycle
+    # ----------------------------------------------------------------------
     def persist_verification_session(self, session: VerificationSession) -> None:
         self._verification_sessions[session.session_id] = session
 
@@ -105,7 +103,9 @@ class InMemoryStore:
             if s.is_active(now) and (verifier_id is None or s.verifier_id == verifier_id)
         ]
 
-    # Verification request lifecycle --------------------------------------
+    # ----------------------------------------------------------------------
+    # Verification request lifecycle
+    # ----------------------------------------------------------------------
     def persist_request(self, verification_request: VerificationRequest) -> None:
         self._verification_requests[verification_request.request_id] = verification_request
 
@@ -119,7 +119,9 @@ class InMemoryStore:
             if r.is_active(now) and (verifier_id is None or r.verifier_id == verifier_id)
         ]
 
-    # Consent lifecycle ----------------------------------------------------
+    # ----------------------------------------------------------------------
+    # Consent lifecycle
+    # ----------------------------------------------------------------------
     def persist_consent(self, consent: ConsentRecord) -> None:
         self._consents[consent.consent_id] = consent
 
@@ -129,7 +131,9 @@ class InMemoryStore:
     def list_holder_consents(self, holder_did: str) -> List[ConsentRecord]:
         return [c for c in self._consents.values() if c.holder_did == holder_did]
 
-    # Presentation lifecycle ----------------------------------------------
+    # ----------------------------------------------------------------------
+    # Presentation lifecycle
+    # ----------------------------------------------------------------------
     def persist_presentation(self, presentation: Presentation) -> None:
         self._presentations[presentation.presentation_id] = presentation
 
@@ -161,7 +165,9 @@ class InMemoryStore:
             del self._presentations[pid]
         return len(to_remove)
 
-    # Verification result cache -------------------------------------------
+    # ----------------------------------------------------------------------
+    # Verification result cache
+    # ----------------------------------------------------------------------
     def persist_result(self, result: VerificationResult) -> None:
         key = f"{getattr(result, 'session_id', 'session')}:{result.presentation.presentation_id}"
         self._results[key] = result
@@ -170,7 +176,9 @@ class InMemoryStore:
         key = f"{session_id}:{presentation_id}"
         return self._results.get(key)
 
-    # Forget / right-to-be-forgotten --------------------------------------
+    # ----------------------------------------------------------------------
+    # Forget / right-to-be-forgotten
+    # ----------------------------------------------------------------------
     def forget_holder(self, holder_did: str) -> ForgetSummary:
         credential_ids = [
             credential_id for credential_id, credential in self._credential_offers.items()
@@ -202,6 +210,9 @@ class InMemoryStore:
             verification_results_removed=len(results_to_remove),
         )
 
+    # ----------------------------------------------------------------------
+    # Session purge
+    # ----------------------------------------------------------------------
     def purge_session(self, session_id: str) -> None:
         self._verification_sessions.pop(session_id, None)
         presentations_to_remove = [
