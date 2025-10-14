@@ -23,7 +23,7 @@ class IdentityAssuranceLevel(str, Enum):
 IAL_ORDER = {
     IdentityAssuranceLevel.MYDATA_LIGHT: 1,
     IdentityAssuranceLevel.NHI_CARD_PIN: 2,
-    IdentityAssanceLevel.MOICA_CERT: 3,
+    IdentityAssuranceLevel.MOICA_CERT: 3,
 }
 
 
