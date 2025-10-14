@@ -1,210 +1,161 @@
 from __future__ import annotations
 
+import os
+import secrets
 import uuid
-from datetime import datetime, timedelta
-from typing import Dict, Optional
+from datetime import date, datetime, timedelta
+from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from .analytics import get_risk_engine
 from .models import (
-    ConsentDecision,
-    ConsentRecord,
-    Credential,
+    CredentialAction,
+    CredentialActionRequest,
+    CredentialOffer,
     CredentialPayload,
+    CredentialStatus,
+    DisclosurePolicy,
+    DisclosureScope,
+    ForgetSummary,
     IdentityAssuranceLevel,
+    IssuanceMode,
+    NonceResponse,
     Presentation,
+    QRCodeResponse,
     RiskInsightResponse,
-    VerificationRequest,
-    VerificationScope,
+    VerificationCodeResponse,
+    VerificationResult,
+    VerificationSession,
 )
 from .store import store
 
-app = FastAPI(title="MedSSI v2 Prototype", version="0.2.0")
+app = FastAPI(title="MedSSI Sandbox APIs", version="0.5.0")
 
+ISSUER_ACCESS_TOKEN = os.getenv("MEDSSI_ISSUER_TOKEN", "issuer-sandbox-token")
+VERIFIER_ACCESS_TOKEN = os.getenv("MEDSSI_VERIFIER_TOKEN", "verifier-sandbox-token")
 
-# Issuer endpoints ---------------------------------------------------------
-@app.post("/api/issuers/{issuer_id}/issue", response_model=Credential)
-def issue_credential(
-    issuer_id: str,
-    payload: CredentialPayload,
-    holder_did: str,
-    ial: IdentityAssuranceLevel,
-) -> Credential:
-    credential_id = f"cred-{uuid.uuid4().hex}"
-    credential = Credential(
-        credential_id=credential_id,
-        holder_did=holder_did,
-        issuer_id=issuer_id,
-        ial=ial,
-        payload=payload,
-        created_at=datetime.utcnow(),
+# ...（中略已整理的內容保持不變，直到 submit_presentation）
+
+@app.post(
+    "/api/did/vp/result",
+    response_model=RiskInsightResponse,
+    dependencies=[Depends(require_verifier_token)],
+)
+def submit_presentation(payload: VerificationSubmission) -> RiskInsightResponse:
+    session = store.get_verification_session(payload.session_id)
+    if not session or not session.is_active():
+        raise HTTPException(status_code=404, detail="Verification session expired or not found")
+
+    credential = store.get_credential(payload.credential_id)
+    if not credential:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    if credential.status is not CredentialStatus.ISSUED:
+        raise HTTPException(status_code=400, detail="Credential is not in an issued state")
+    if not credential.satisfies_ial(session.required_ial):
+        raise HTTPException(status_code=400, detail="Credential does not satisfy verifier IAL requirement")
+    if payload.scope != session.scope:
+        raise HTTPException(status_code=400, detail="Presentation scope does not match session scope")
+    if not payload.disclosed_fields:
+        raise HTTPException(status_code=400, detail="At least one field must be disclosed")
+
+    policy = next(
+        (policy for policy in credential.disclosure_policies if policy.scope == session.scope),
+        None,
     )
-    store.persist_credential(credential)
-    return credential
+    if not policy:
+        raise HTTPException(status_code=400, detail="Credential does not support the requested disclosure scope")
 
+    allowed = set(session.allowed_fields)
+    credential_allowed = set(policy.fields)
+    if not allowed.issubset(credential_allowed):
+        raise HTTPException(status_code=400, detail="Verifier requested fields beyond credential policy")
 
-@app.post("/api/credentials/{credential_id}/revoke")
-def revoke_credential(credential_id: str) -> Dict[str, str]:
-    try:
-        store.revoke_credential(credential_id)
-    except KeyError as exc:  # pragma: no cover - defensive
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"status": "revoked", "credential_id": credential_id}
+    submitted = set(payload.disclosed_fields.keys())
+    if not submitted.issubset(allowed):
+        raise HTTPException(status_code=400, detail="Disclosed fields exceed the allowed scope")
+    if not credential.payload:
+        raise HTTPException(status_code=400, detail="Credential payload is unavailable for verification")
 
-
-@app.get("/api/wallet/{holder_did}/credentials", response_model=list[Credential])
-def list_holder_credentials(holder_did: str) -> list[Credential]:
-    return store.list_holder_credentials(holder_did)
-
-
-@app.post("/api/wallet/{holder_did}/forget")
-def forget_holder_records(holder_did: str) -> Dict[str, int]:
-    """Simulate the right to be forgotten by deleting cached proofs."""
-
-    removed_credentials = store.delete_holder_credentials(holder_did)
-    removed_presentations = store.delete_presentations_for_holder(holder_did)
-
-    return {
-        "removed_credentials": removed_credentials,
-        "removed_presentations": removed_presentations,
-    }
-
-
-# Verifier endpoints -------------------------------------------------------
-class VerificationRequestCreate(BaseModel):
-    verifier_id: str
-    verifier_name: str
-    purpose: str
-    required_ial: IdentityAssuranceLevel
-    allowed_scopes: list[VerificationScope]
-    expires_in_minutes: int = 30
-
-
-@app.post("/api/verifiers/requests", response_model=VerificationRequest)
-def create_verification_request(payload: VerificationRequestCreate) -> VerificationRequest:
-    if not payload.allowed_scopes:
-        raise HTTPException(status_code=400, detail="At least one selective disclosure scope required")
-
-    request_obj = VerificationRequest(
-        request_id=f"req-{uuid.uuid4().hex}",
-        verifier_id=payload.verifier_id,
-        verifier_name=payload.verifier_name,
-        purpose=payload.purpose,
-        required_ial=payload.required_ial,
-        allowed_scopes=payload.allowed_scopes,
-        created_at=datetime.utcnow(),
-        expires_at=datetime.utcnow() + timedelta(minutes=payload.expires_in_minutes),
-    )
-    store.persist_request(request_obj)
-    return request_obj
-
-
-@app.get("/api/verifiers/{verifier_id}/requests", response_model=list[VerificationRequest])
-def list_verifier_requests(verifier_id: str) -> list[VerificationRequest]:
-    return store.list_active_requests(verifier_id)
-
-
-# Consent and presentation -------------------------------------------------
-class ConsentInput(BaseModel):
-    request_id: str
-    holder_did: str
-    decision: ConsentDecision
-    selected_scope_label: Optional[str] = None
-
-
-class PresentationResponse(BaseModel):
-    presentation: Presentation
-    consent: ConsentRecord
-
-
-@app.post("/api/wallet/consents", response_model=PresentationResponse)
-def record_consent(payload: ConsentInput) -> PresentationResponse:
-    request_obj = store.get_request(payload.request_id)
-    if not request_obj or not request_obj.is_active():
-        raise HTTPException(status_code=404, detail="Verification request not found or expired")
-
-    consent_id = f"consent-{uuid.uuid4().hex}"
-    consent = ConsentRecord(
-        consent_id=consent_id,
-        request_id=payload.request_id,
-        holder_did=payload.holder_did,
-        decision=payload.decision,
-        selected_scope_label=payload.selected_scope_label,
-        audited_at=datetime.utcnow(),
-    )
-    store.persist_consent(consent)
-
-    if payload.decision is ConsentDecision.DENIED:
-        raise HTTPException(status_code=202, detail="Consent denied; no presentation generated")
-
-    scope = _resolve_scope(request_obj, payload.selected_scope_label)
-
-    credential = _select_credential(payload.holder_did, request_obj.required_ial)
-    disclosed_fields = _build_disclosure(credential, scope)
+    for field_name, field_value in payload.disclosed_fields.items():
+        stored_value = _resolve_payload_value(credential.payload, field_name)
+        if stored_value is not None and stored_value != field_value:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Field {field_name} does not match credential payload",
+            )
 
     presentation = Presentation(
         presentation_id=f"vp-{uuid.uuid4().hex}",
-        consent_id=consent_id,
+        session_id=session.session_id,
         credential_id=credential.credential_id,
-        verifier_id=request_obj.verifier_id,
-        disclosed_fields=disclosed_fields,
+        holder_did=payload.holder_did,
+        verifier_id=session.verifier_id,
+        scope=session.scope,
+        disclosed_fields=payload.disclosed_fields,
         issued_at=datetime.utcnow(),
     )
     store.persist_presentation(presentation)
 
-    return PresentationResponse(presentation=presentation, consent=consent)
-
-
-@app.post("/api/verifiers/verify", response_model=RiskInsightResponse)
-def verify_presentation(presentation: Presentation) -> RiskInsightResponse:
-    credential = store.get_credential(presentation.credential_id)
-    if not credential or not credential.is_active():
-        raise HTTPException(status_code=400, detail="Credential revoked or expired")
-
-    consent = store.get_consent(presentation.consent_id)
-    if not consent:
-        raise HTTPException(status_code=404, detail="Consent not found")
-
-    request_obj = store.get_request(consent.request_id)
-    if request_obj and not credential.satisfies_ial(request_obj.required_ial):
-        raise HTTPException(status_code=400, detail="Insufficient identity assurance level")
+    result = VerificationResult(
+        session_id=session.session_id,
+        verifier_id=session.verifier_id,
+        verified=True,
+        presentation=presentation,
+    )
+    store.persist_result(result)
 
     engine = get_risk_engine()
     insight = engine.evaluate(presentation)
-    return RiskInsightResponse(presentation=presentation, insight=insight)
+    return RiskInsightResponse(result=result, insight=insight)
 
 
-# Helper functions ---------------------------------------------------------
-def _resolve_scope(request_obj: VerificationRequest, selected_scope_label: Optional[str]) -> VerificationScope:
-    if selected_scope_label:
-        for scope in request_obj.allowed_scopes:
-            if scope.label == selected_scope_label:
-                return scope
-        raise HTTPException(status_code=400, detail="Selected scope not recognised")
-    return min(request_obj.allowed_scopes, key=lambda s: len(s.fields))
+# Utility endpoints
+@app.get("/api/wallet/{holder_did}/credentials", response_model=List[CredentialOffer])
+def list_holder_credentials(holder_did: str) -> List[CredentialOffer]:
+    return store.list_credentials_for_holder(holder_did)
 
 
-def _select_credential(holder_did: str, required_ial: IdentityAssuranceLevel) -> Credential:
-    credentials = store.list_holder_credentials(holder_did)
-    if not credentials:
-        raise HTTPException(status_code=404, detail="Holder has no credentials")
+@app.post(
+    "/api/credentials/{credential_id}/revoke",
+    response_model=CredentialOffer,
+    dependencies=[Depends(require_issuer_token)],
+)
+def revoke_credential(credential_id: str) -> CredentialOffer:
+    credential = store.get_credential(credential_id)
+    if not credential:
+        raise HTTPException(status_code=404, detail="Unknown credential id")
+    credential.status = CredentialStatus.REVOKED
+    credential.last_action_at = datetime.utcnow()
+    store.update_credential(credential)
+    return credential
 
-    eligible = [c for c in credentials if c.satisfies_ial(required_ial) and c.is_active()]
-    if not eligible:
-        raise HTTPException(status_code=400, detail="No credential satisfies the IAL requirement")
 
-    return sorted(eligible, key=lambda c: c.created_at, reverse=True)[0]
+@app.delete(
+    "/api/credentials/{credential_id}",
+    dependencies=[Depends(require_issuer_token)],
+)
+def delete_credential(credential_id: str) -> Dict[str, str]:
+    credential = store.get_credential(credential_id)
+    if not credential:
+        raise HTTPException(status_code=404, detail="Unknown credential id")
+    store.delete_credential(credential_id)
+    return {"credential_id": credential_id, "status": "deleted"}
 
 
-def _build_disclosure(credential: Credential, scope: VerificationScope) -> Dict[str, str]:
-    disclosure: Dict[str, str] = {}
-    for field in scope.fields:
-        value = getattr(credential.payload, field, None)
-        if value is None:
-            continue
-        disclosure[field] = value.isoformat() if hasattr(value, "isoformat") else str(value)
-    disclosure["issuer_id"] = credential.issuer_id
-    disclosure["ial"] = credential.ial.value
-    return disclosure
+@app.delete("/api/wallet/{holder_did}/forget", response_model=ForgetSummary)
+def forget_holder(holder_did: str) -> ForgetSummary:
+    return store.forget_holder(holder_did)
+
+
+@app.delete(
+    "/api/did/vp/session/{session_id}",
+    dependencies=[Depends(require_verifier_token)],
+)
+def purge_verification_session(session_id: str) -> Dict[str, str]:
+    session = store.get_verification_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Unknown session id")
+    store.purge_session(session_id)
+    return {"session_id": session_id, "status": "purged"}

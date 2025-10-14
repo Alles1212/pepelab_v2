@@ -2,108 +2,228 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 
 from pydantic import BaseModel, Field
 
 
 class IdentityAssuranceLevel(str, Enum):
-    IAL1 = "IAL1"
-    IAL2 = "IAL2"
-    IAL3 = "IAL3"
+    """IAL definitions aligned with Taiwan MyData / NHI assurance levels."""
+
+    MYDATA_LIGHT = "MYDATA_LIGHT"
+    """Login with MyData soft token (基本憑證)."""
+
+    NHI_CARD_PIN = "NHI_CARD_PIN"
+    """NHI smart card + PIN verification."""
+
+    MOICA_CERT = "MOICA_CERT"
+    """MOICA citizen digital certificate with card reader."""
+
+
+IAL_ORDER = {
+    IdentityAssuranceLevel.MYDATA_LIGHT: 1,
+    IdentityAssuranceLevel.NHI_CARD_PIN: 2,
+    IdentityAssuranceLevel.MOICA_CERT: 3,
+}
+
+
+class FHIRCoding(BaseModel):
+    system: str = Field(..., description="FHIR coding system URI")
+    code: str = Field(..., description="Code value (e.g. ICD-10, ATC)")
+    display: Optional[str] = Field(None, description="Human friendly label")
+
+
+class FHIRCodeableConcept(BaseModel):
+    coding: List[FHIRCoding]
+    text: Optional[str] = None
+
+
+class FHIRIdentifier(BaseModel):
+    system: str
+    value: str
+    assigner: Optional[str] = None
+
+
+class FHIRConditionSummary(BaseModel):
+    resourceType: Literal["Condition"] = "Condition"
+    id: str
+    code: FHIRCodeableConcept
+    recordedDate: date
+    encounter: FHIRIdentifier
+    subject: FHIRIdentifier
+
+
+class FHIRMedicationDispenseSummary(BaseModel):
+    resourceType: Literal["MedicationDispense"] = "MedicationDispense"
+    id: str
+    medicationCodeableConcept: FHIRCodeableConcept
+    quantity_text: str = Field(..., description="Formatted quantity string, e.g. '30 tablets'")
+    days_supply: int = Field(..., ge=1, description="Days of therapy covered by this dispense")
+    performer: Optional[FHIRIdentifier] = Field(
+        None, description="Pharmacist or institution identifier"
+    )
+    pickup_window_end: Optional[date] = Field(
+        None, description="Last day the medication can be picked up"
+    )
 
 
 class CredentialPayload(BaseModel):
-    diagnosis_code: str = Field(..., description="ICD-10-CM or SNOMED diagnosis code")
-    visit_date: date
-    physician_id: str
-    facility_id: str
-    encounter_notes_hash: str = Field(..., description="Hash pointer to the clinical note or bundle")
-    lab_bundle_hash: Optional[str] = Field(
-        None, description="Optional hash pointer to lab bundle stored off-chain"
+    """FHIR-aligned payload embedded inside the verifiable credential."""
+
+    fhir_profile: str = Field(
+        "https://profiles.iisigroup.com.tw/StructureDefinition/medssi-bundle",
+        description="FHIR profile URI used for this credential payload",
     )
-    expiry: Optional[date] = Field(
-        None, description="Optional date after which the credential should be refreshed"
+    condition: FHIRConditionSummary
+    encounter_summary_hash: str = Field(
+        ..., description="Hash of the supporting DiagnosticReport / bundle stored off-chain"
+    )
+    managing_organization: FHIRIdentifier
+    issued_on: date
+    consent_expires_on: Optional[date] = Field(
+        None, description="Holder defined expiry for consented sharing"
+    )
+    medication_dispense: Optional[List[FHIRMedicationDispenseSummary]] = Field(
+        default_factory=list,
+        description="Optional medication dispense summaries linked to the visit",
     )
 
 
-class Credential(BaseModel):
+class IssuanceMode(str, Enum):
+    WITH_DATA = "WITH_DATA"
+    WITHOUT_DATA = "WITHOUT_DATA"
+
+
+class DisclosureScope(str, Enum):
+    MEDICAL_RECORD = "MEDICAL_RECORD"
+    MEDICATION_PICKUP = "MEDICATION_PICKUP"
+
+
+class DisclosurePolicy(BaseModel):
+    scope: DisclosureScope
+    fields: List[str] = Field(
+        ..., description="List of FHIR path strings available for selective disclosure"
+    )
+    description: Optional[str] = Field(None, description="Human friendly explanation")
+
+
+class CredentialStatus(str, Enum):
+    OFFERED = "OFFERED"
+    ISSUED = "ISSUED"
+    DECLINED = "DECLINED"
+    REVOKED = "REVOKED"
+
+
+class CredentialOffer(BaseModel):
     credential_id: str
-    holder_did: str
+    transaction_id: str
     issuer_id: str
     ial: IdentityAssuranceLevel
-    payload: CredentialPayload
+    mode: IssuanceMode
+    qr_token: str
+    nonce: str
+    status: CredentialStatus
     created_at: datetime
-    revoked_at: Optional[datetime] = None
+    expires_at: datetime
+    last_action_at: datetime
+    disclosure_policies: List[DisclosurePolicy]
+    holder_did: Optional[str] = None
+    holder_hint: Optional[str] = None
+    payload: Optional[CredentialPayload] = None
 
     def is_active(self, as_of: Optional[datetime] = None) -> bool:
         now = as_of or datetime.utcnow()
-        if self.revoked_at and self.revoked_at <= now:
-            return False
-        if self.payload.expiry and self.payload.expiry < now.date():
-            return False
-        return True
+        return self.status not in {CredentialStatus.REVOKED, CredentialStatus.DECLINED} and now <= self.expires_at
 
     def satisfies_ial(self, required: IdentityAssuranceLevel) -> bool:
         return IAL_ORDER[self.ial] >= IAL_ORDER[required]
 
 
-class VerificationScope(BaseModel):
-    label: str
-    fields: List[str]
+class QRCodeResponse(BaseModel):
+    credential: CredentialOffer
+    qr_payload: str
 
 
-class VerificationRequest(BaseModel):
-    request_id: str
+class NonceResponse(BaseModel):
+    transaction_id: str
+    credential_id: str
+    nonce: str
+    status: CredentialStatus
+    expires_at: datetime
+    mode: IssuanceMode
+    disclosure_policies: List[DisclosurePolicy]
+    payload_available: bool
+
+
+class CredentialAction(str, Enum):
+    ACCEPT = "ACCEPT"
+    DECLINE = "DECLINE"
+    REVOKE = "REVOKE"
+    UPDATE = "UPDATE"
+
+
+class CredentialActionRequest(BaseModel):
+    action: CredentialAction
+    holder_did: Optional[str] = None
+    payload: Optional[CredentialPayload] = None
+    disclosures: Optional[Dict[str, str]] = None
+
+
+class VerificationSession(BaseModel):
+    session_id: str
     verifier_id: str
     verifier_name: str
     purpose: str
     required_ial: IdentityAssuranceLevel
-    allowed_scopes: List[VerificationScope]
-    expires_at: datetime
+    scope: DisclosureScope
+    allowed_fields: List[str]
+    qr_token: str
     created_at: datetime
+    expires_at: datetime
+    last_polled_at: datetime
 
     def is_active(self, as_of: Optional[datetime] = None) -> bool:
         now = as_of or datetime.utcnow()
         return now <= self.expires_at
 
 
-class ConsentDecision(str, Enum):
-    APPROVED = "APPROVED"
-    DENIED = "DENIED"
-
-
-class ConsentRecord(BaseModel):
-    consent_id: str
-    request_id: str
-    holder_did: str
-    decision: ConsentDecision
-    selected_scope_label: Optional[str] = None
-    audited_at: datetime
+class VerificationCodeResponse(BaseModel):
+    session: VerificationSession
+    qr_payload: str
 
 
 class Presentation(BaseModel):
     presentation_id: str
-    consent_id: str
+    session_id: str
     credential_id: str
+    holder_did: str
     verifier_id: str
+    scope: DisclosureScope
     disclosed_fields: Dict[str, str]
     issued_at: datetime
 
 
+class VerificationResult(BaseModel):
+    session_id: str
+    verifier_id: str
+    verified: bool
+    presentation: Presentation
+
+
 class RiskInsight(BaseModel):
+    scope: DisclosureScope
     gastritis_risk_score: float
     trend_window_days: int
     supporting_indicators: Dict[str, float]
 
 
 class RiskInsightResponse(BaseModel):
-    presentation: Presentation
+    result: VerificationResult
     insight: RiskInsight
 
 
-IAL_ORDER = {
-    IdentityAssuranceLevel.IAL1: 1,
-    IdentityAssuranceLevel.IAL2: 2,
-    IdentityAssuranceLevel.IAL3: 3,
-}
+class ForgetSummary(BaseModel):
+    holder_did: str
+    credentials_removed: int
+    presentations_removed: int
+    verification_results_removed: int
