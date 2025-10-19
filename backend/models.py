@@ -9,15 +9,9 @@ from pydantic import BaseModel, Field, root_validator
 
 class IdentityAssuranceLevel(str, Enum):
     """IAL definitions aligned with Taiwan MyData / NHI assurance levels."""
-
     MYDATA_LIGHT = "MYDATA_LIGHT"
-    """Login with MyData soft token (基本憑證)."""
-
     NHI_CARD_PIN = "NHI_CARD_PIN"
-    """NHI smart card + PIN verification."""
-
     MOICA_CERT = "MOICA_CERT"
-    """MOICA citizen digital certificate with card reader."""
 
 
 IAL_ORDER = {
@@ -25,7 +19,6 @@ IAL_ORDER = {
     IdentityAssuranceLevel.NHI_CARD_PIN: 2,
     IdentityAssuranceLevel.MOICA_CERT: 3,
 }
-
 
 IAL_DESCRIPTIONS = {
     IdentityAssuranceLevel.MYDATA_LIGHT: "MyData 行動化驗證（手機門號＋健保卡號）對應 IAL2 遠端實名驗證。",
@@ -38,6 +31,9 @@ def describe_ial(ial: IdentityAssuranceLevel) -> str:
     return IAL_DESCRIPTIONS[ial]
 
 
+# --------------------------------------
+# FHIR Structures
+# --------------------------------------
 class FHIRCoding(BaseModel):
     system: str = Field(..., description="FHIR coding system URI")
     code: str = Field(..., description="Code value (e.g. ICD-10, ATC)")
@@ -70,34 +66,24 @@ class FHIRMedicationDispenseSummary(BaseModel):
     medicationCodeableConcept: FHIRCodeableConcept
     quantity_text: str = Field(..., description="Formatted quantity string, e.g. '30 tablets'")
     days_supply: int = Field(..., ge=1, description="Days of therapy covered by this dispense")
-    performer: Optional[FHIRIdentifier] = Field(
-        None, description="Pharmacist or institution identifier"
-    )
-    pickup_window_end: Optional[date] = Field(
-        None, description="Last day the medication can be picked up"
-    )
+    performer: Optional[FHIRIdentifier] = Field(None, description="Pharmacist or institution identifier")
+    pickup_window_end: Optional[date] = Field(None, description="Last day the medication can be picked up")
 
 
+# --------------------------------------
+# Credential Core
+# --------------------------------------
 class CredentialPayload(BaseModel):
-    """FHIR-aligned payload embedded inside the verifiable credential."""
-
     fhir_profile: str = Field(
         "https://profiles.iisigroup.com.tw/StructureDefinition/medssi-bundle",
         description="FHIR profile URI used for this credential payload",
     )
     condition: FHIRConditionSummary
-    encounter_summary_hash: str = Field(
-        ..., description="Hash of the supporting DiagnosticReport / bundle stored off-chain"
-    )
+    encounter_summary_hash: str
     managing_organization: FHIRIdentifier
     issued_on: date
-    consent_expires_on: Optional[date] = Field(
-        None, description="Holder defined expiry for consented sharing"
-    )
-    medication_dispense: Optional[List[FHIRMedicationDispenseSummary]] = Field(
-        default_factory=list,
-        description="Optional medication dispense summaries linked to the visit",
-    )
+    consent_expires_on: Optional[date] = None
+    medication_dispense: Optional[List[FHIRMedicationDispenseSummary]] = Field(default_factory=list)
 
 
 class IssuanceMode(str, Enum):
@@ -112,10 +98,8 @@ class DisclosureScope(str, Enum):
 
 class DisclosurePolicy(BaseModel):
     scope: DisclosureScope
-    fields: List[str] = Field(
-        ..., description="List of FHIR path strings available for selective disclosure"
-    )
-    description: Optional[str] = Field(None, description="Human friendly explanation")
+    fields: List[str]
+    description: Optional[str] = None
 
 
 class CredentialStatus(str, Enum):
@@ -160,6 +144,9 @@ class CredentialOffer(BaseModel):
         return IAL_ORDER[self.ial] >= IAL_ORDER[required]
 
 
+# --------------------------------------
+# Responses
+# --------------------------------------
 class QRCodeResponse(BaseModel):
     credential: CredentialOffer
     qr_payload: str
@@ -187,6 +174,9 @@ class NonceResponse(BaseModel):
         return values
 
 
+# --------------------------------------
+# Actions & Verification
+# --------------------------------------
 class CredentialAction(str, Enum):
     ACCEPT = "ACCEPT"
     DECLINE = "DECLINE"
@@ -252,6 +242,9 @@ class VerificationResult(BaseModel):
     presentation: Presentation
 
 
+# --------------------------------------
+# Risk Insight Model
+# --------------------------------------
 class RiskInsight(BaseModel):
     scope: DisclosureScope
     gastritis_risk_score: float
@@ -264,6 +257,9 @@ class RiskInsightResponse(BaseModel):
     insight: RiskInsight
 
 
+# --------------------------------------
+# Utility
+# --------------------------------------
 class ForgetSummary(BaseModel):
     holder_did: str
     credentials_removed: int
