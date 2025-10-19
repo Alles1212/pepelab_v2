@@ -3,10 +3,31 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MedSSI Sandbox Wallet</title>
+    <title>MedSSI 病歷授權與領藥原型 v2</title>
+    <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <a class="skip-link" href="#step-holder">直接前往錢包操作</a>
+
+    <header>
+      <h1>MedSSI 病歷授權與領藥原型 v2</h1>
+      <p>
+        透過 MyData / 健保卡的身份保證等級（IAL）與 FHIR 結構化病歷，示範發行端、病患錢包與驗證端如何執行選擇性揭露與領藥流程。
+        介面採用大字體與分步驟指引，方便長者或陪同家屬操作。
+      </p>
+    </header>
+
     <div id="root"></div>
+
+    <footer>
+      <p>
+        本原型僅用於展示流程。實際部署時需整合 Trust Registry、MyData API 以及醫療法規審查，並於生產環境採用持久化儲存與稽核機制。
+      </p>
+      <p>
+        系統設計遵循電子簽章法、醫療法第72條與個資法最小蒐集原則，所有授權皆需病患明示同意並可透過撤銷／遺忘權收回。
+      </p>
+    </footer>
+
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
