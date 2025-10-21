@@ -215,6 +215,7 @@ class CredentialActionRequest(BaseModel):
 
 class VerificationSession(BaseModel):
     session_id: str
+    transaction_id: Optional[str] = None
     verifier_id: str
     verifier_name: str
     purpose: str
@@ -226,6 +227,7 @@ class VerificationSession(BaseModel):
     created_at: datetime
     expires_at: datetime
     last_polled_at: datetime
+    template_ref: Optional[str] = None
 
     @root_validator(pre=True)
     def _ensure_session_ial(cls, values: Dict[str, Any]) -> Dict[str, Any]:

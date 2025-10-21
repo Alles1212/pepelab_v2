@@ -28,8 +28,6 @@ Issuer (Hospital) ──QR──> Wallet (Patient) ──VP──> Verifier (Res
 ## 後端 API
 | Method | Path | 說明 |
 | --- | --- | --- |
-| Method | Path | 說明 |
-| --- | --- | --- |
 | `POST` | `/v2/api/qrcode/data` | 發行含 FHIR 資料的憑證，需指定 `primary_scope` 與 disclosure policies。 |
 | `POST` | `/v2/api/qrcode/nodata` | 發行空白憑證（僅含 scope 與欄位），供錢包後補資料；可附帶 payload template。 |
 | `GET` | `/v2/api/credential/nonce?transactionId=...` | 錢包以交易 ID 取得 nonce、模式、揭露欄位與（若提供）FHIR template。 |
@@ -42,6 +40,21 @@ Issuer (Hospital) ──QR──> Wallet (Patient) ──VP──> Verifier (Res
 | `POST` | `/v2/api/did/vp/result` | 接收 VP，驗證欄位與 FHIR 值後回傳 AI insight。 |
 | `DELETE` | `/v2/api/did/vp/session/{session_id}` | 清除驗證 session 及其結果。 |
 | `POST` | `/v2/api/system/reset` | 重新初始化沙盒（清除憑證、VP、Session）。 |
+
+### MODA Sandbox 相容端點
+
+為了在不直接呼叫官方服務的情況下模擬「數位憑證皮夾」沙盒流程，後端新增 `/api/*` 相容層，回傳欄位與官方 Swagger 介面一致（含 `transactionId`、`qrcodeImage` / `qrCode`、`authUri` / `deepLink` 等）。【F:README.md†L52-L72】
+
+| Method | Path | 說明 |
+| --- | --- | --- |
+| `POST` | `/api/qrcode/data`、`/api/medical/card/issue` | 發卡並回傳可直接放入 `<img>` 的 QR Code Data URI、`deepLink` 與 `qrPayload`。 |
+| `POST` | `/api/qrcode/nodata` | 建立無個資 QR Code，保留 `payloadTemplate` 供錢包後補。 |
+| `GET` | `/api/credential/nonce/{transactionId}` | 依交易序號取得 nonce、選擇性揭露欄位與模擬的 VC JWT。 |
+| `PUT` | `/api/credential/{cid}/revocation` | 將電子卡狀態更新為撤銷。 |
+| `POST` | `/api/oidvp/qrcode` | 生成驗證 QR Code，支援自訂 `transactionId` 與欄位清單。 |
+| `POST` | `/api/oidvp/result` | 以交易序號查詢 VP 上傳結果與揭露欄位值。 |
+
+這些相容端點仍套用相同的 Bearer token、5 分鐘有效期限與 IAL 驗證，方便與 React 示範介面或外部測試工具（Postman、Swagger UI）串接。【F:README.md†L52-L90】
 
 > ℹ️ 發行端端點需附帶 `Authorization: Bearer issuer-sandbox-token`（可用環境變數 `MEDSSI_ISSUER_TOKEN` 覆寫）；錢包端使用 `wallet-sandbox-token`；驗證端則使用 `verifier-sandbox-token`。
 

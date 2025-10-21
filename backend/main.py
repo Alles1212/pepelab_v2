@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import base64
+import io
+import json
 import os
 import secrets
 import uuid
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from .analytics import get_risk_engine
 from .models import (
@@ -34,6 +37,11 @@ from .models import (
 )
 from .store import store
 
+
+try:  # pragma: no cover - optional dependency for nicer QR codes
+    import qrcode
+except Exception:  # pragma: no cover - fallback to text payloads
+    qrcode = None
 
 app = FastAPI(title="MedSSI Sandbox APIs", version="0.6.0")
 allowed_origins_env = os.getenv(
@@ -131,33 +139,57 @@ async def cleanup_expired_middleware(request, call_next):
 
 
 class IssuanceWithDataRequest(BaseModel):
-    issuer_id: str
-    holder_did: str
+    issuer_id: str = Field(..., alias="issuerId")
+    holder_did: Optional[str] = Field(None, alias="holderDid")
     holder_hint: Optional[str] = Field(
-        None, description="Optional hint shown to wallets (e.g. patient name)",
+        None,
+        alias="holderHint",
+        description="Optional hint shown to wallets (e.g. patient name)",
     )
-    ial: IdentityAssuranceLevel
-    primary_scope: DisclosureScope
-    payload: CredentialPayload
-    disclosure_policies: List[DisclosurePolicy] = Field(
-        default_factory=lambda: _default_disclosure_policies(),
+    ial: IdentityAssuranceLevel = Field(
+        IdentityAssuranceLevel.NHI_CARD_PIN, alias="ial"
+    )
+    primary_scope: DisclosureScope = Field(
+        DisclosureScope.MEDICAL_RECORD, alias="primaryScope"
+    )
+    payload: Optional[Union[CredentialPayload, Dict[str, Any]]] = Field(
+        None, alias="payload"
+    )
+    disclosure_policies: Optional[List[DisclosurePolicy]] = Field(
+        default=None,
+        alias="disclosurePolicies",
         description="Selective disclosure policies grouped by scope.",
     )
-    valid_for_minutes: int = Field(5, ge=1, le=5)
+    valid_for_minutes: int = Field(5, ge=1, le=5, alias="validMinutes")
+    transaction_id: Optional[str] = Field(None, alias="transactionId")
+
+    class Config:
+        allow_population_by_field_name = True
 
 
 class IssuanceWithoutDataRequest(BaseModel):
-    issuer_id: str
-    ial: IdentityAssuranceLevel
-    primary_scope: DisclosureScope
-    disclosure_policies: List[DisclosurePolicy]
-    valid_for_minutes: int = Field(5, ge=1, le=5)
-    holder_hint: Optional[str] = None
-    holder_did: Optional[str] = None
-    payload_template: Optional[CredentialPayload] = Field(
+    issuer_id: str = Field(..., alias="issuerId")
+    ial: IdentityAssuranceLevel = Field(
+        IdentityAssuranceLevel.NHI_CARD_PIN, alias="ial"
+    )
+    primary_scope: DisclosureScope = Field(
+        DisclosureScope.MEDICAL_RECORD, alias="primaryScope"
+    )
+    disclosure_policies: Optional[List[DisclosurePolicy]] = Field(
+        default=None, alias="disclosurePolicies"
+    )
+    valid_for_minutes: int = Field(5, ge=1, le=5, alias="validMinutes")
+    holder_hint: Optional[str] = Field(None, alias="holderHint")
+    holder_did: Optional[str] = Field(None, alias="holderDid")
+    transaction_id: Optional[str] = Field(None, alias="transactionId")
+    payload_template: Optional[Union[CredentialPayload, Dict[str, Any]]] = Field(
         None,
+        alias="payloadTemplate",
         description="Template describing the FHIR structure the holder must supply.",
     )
+
+    class Config:
+        allow_population_by_field_name = True
 
 
 class VerificationSubmission(BaseModel):
@@ -172,8 +204,134 @@ class ResetResponse(BaseModel):
     timestamp: datetime
 
 
+class GovIssueResponse(BaseModel):
+    transaction_id: str = Field(..., alias="transactionId")
+    qr_code: str = Field(..., alias="qrCode")
+    qr_payload: str = Field(..., alias="qrPayload")
+    deep_link: str = Field(..., alias="deepLink")
+    credential_id: str = Field(..., alias="credentialId")
+    expires_at: datetime = Field(..., alias="expiresAt")
+    ial: IdentityAssuranceLevel = Field(..., alias="ial")
+    ial_description: str = Field(..., alias="ialDescription")
+    scope: DisclosureScope = Field(..., alias="scope")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class GovCredentialNonceResponse(BaseModel):
+    transaction_id: str = Field(..., alias="transactionId")
+    credential_id: str = Field(..., alias="credentialId")
+    credential_status: CredentialStatus = Field(..., alias="credentialStatus")
+    nonce: str = Field(..., alias="nonce")
+    ial: IdentityAssuranceLevel = Field(..., alias="ial")
+    ial_description: str = Field(..., alias="ialDescription")
+    mode: IssuanceMode = Field(..., alias="mode")
+    expires_at: datetime = Field(..., alias="expiresAt")
+    payload_available: bool = Field(..., alias="payloadAvailable")
+    disclosure_policies: List[DisclosurePolicy] = Field(..., alias="disclosurePolicies")
+    payload_template: Optional[CredentialPayload] = Field(None, alias="payloadTemplate")
+    payload: Optional[CredentialPayload] = Field(None, alias="payload")
+    credential: str = Field(..., alias="credential")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class OIDVPSessionRequest(BaseModel):
+    verifier_id: str = Field(..., alias="verifierId")
+    verifier_name: str = Field(..., alias="verifierName")
+    purpose: Optional[str] = Field("憑證驗證", alias="purpose")
+    scope: DisclosureScope = Field(DisclosureScope.MEDICAL_RECORD, alias="scope")
+    ial: IdentityAssuranceLevel = Field(IdentityAssuranceLevel.NHI_CARD_PIN, alias="ial")
+    fields: Optional[List[str]] = Field(None, alias="fields")
+    valid_minutes: int = Field(5, ge=1, le=10, alias="validMinutes")
+    transaction_id: Optional[str] = Field(None, alias="transactionId")
+    ref: Optional[str] = Field(None, alias="ref")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class OIDVPQRCodeResponse(BaseModel):
+    transaction_id: str = Field(..., alias="transactionId")
+    qrcode_image: str = Field(..., alias="qrcodeImage")
+    auth_uri: str = Field(..., alias="authUri")
+    qr_payload: str = Field(..., alias="qrPayload")
+    scope: DisclosureScope = Field(..., alias="scope")
+    ial: IdentityAssuranceLevel = Field(..., alias="ial")
+    expires_at: datetime = Field(..., alias="expiresAt")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class OIDVPResultRequest(BaseModel):
+    transaction_id: str = Field(..., alias="transactionId")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class OIDVPResultResponse(BaseModel):
+    verify_result: bool = Field(..., alias="verifyResult")
+    result_description: str = Field(..., alias="resultDescription")
+    transaction_id: str = Field(..., alias="transactionId")
+    data: List[Dict[str, Any]] = Field(default_factory=list, alias="data")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
 def _build_qr_payload(token: str, kind: str) -> str:
     return f"medssi://{kind}?token={token}"
+
+
+def _make_qr_data_uri(payload: str) -> str:
+    if qrcode is not None:
+        buffer = io.BytesIO()
+        image = qrcode.make(payload)
+        image.save(buffer, format="PNG")
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+        return f"data:image/png;base64,{encoded}"
+    encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+    return f"data:text/plain;base64,{encoded}"
+
+
+def _build_deep_link(
+    token: str, *, kind: str, transaction_id: Optional[str] = None
+) -> str:
+    base_scheme = "modadigitalwallet://"
+    if kind == "credential":
+        return f"{base_scheme}credential_offer?token={token}"
+    params = [f"token={token}"]
+    if transaction_id:
+        params.append(f"transactionId={transaction_id}")
+    return f"{base_scheme}authorize?{'&'.join(params)}"
+
+
+def _mock_credential_jwt(offer: CredentialOffer) -> str:
+    header = {"typ": "JWT", "alg": "ES256"}
+    payload = {
+        "jti": f"https://medssi.dev/api/credential/{offer.credential_id}",
+        "sub": offer.holder_did or "did:example:patient-demo",
+        "iss": offer.issuer_id,
+        "iat": int(offer.created_at.timestamp()),
+        "exp": int(offer.expires_at.timestamp()),
+        "scope": offer.primary_scope.value,
+        "nonce": offer.nonce,
+        "ial": offer.ial.value,
+    }
+    encoded_header = base64.urlsafe_b64encode(json.dumps(header).encode("utf-8")).decode(
+        "ascii"
+    ).rstrip("=")
+    encoded_payload = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode(
+        "ascii"
+    ).rstrip("=")
+    signature = base64.urlsafe_b64encode(
+        f"sig:{offer.credential_id}".encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    return f"{encoded_header}.{encoded_payload}.{signature}"
 
 
 def _default_disclosure_policies() -> List[DisclosurePolicy]:
@@ -235,6 +393,113 @@ def _ensure_valid_policies(policies: List[DisclosurePolicy]) -> None:
             )
 
 
+def _resolve_policies(
+    policies: Optional[List[DisclosurePolicy]],
+) -> List[DisclosurePolicy]:
+    if policies:
+        _ensure_valid_policies(policies)
+        return policies
+    defaults = _default_disclosure_policies()
+    _ensure_valid_policies(defaults)
+    return defaults
+
+
+def _sample_payload() -> CredentialPayload:
+    today = date.today()
+    sample_dict: Dict[str, Any] = {
+        "fhir_profile": "https://profiles.iisigroup.com.tw/StructureDefinition/medssi-bundle",
+        "condition": {
+            "resourceType": "Condition",
+            "id": "cond-sample",
+            "code": {
+                "coding": [
+                    {
+                        "system": "http://hl7.org/fhir/sid/icd-10",
+                        "code": "K29.7",
+                        "display": "Gastritis, unspecified",
+                    }
+                ],
+                "text": "Gastritis, unspecified",
+            },
+            "recordedDate": today.isoformat(),
+            "encounter": {"system": "urn:medssi:encounter-id", "value": "enc-sample"},
+            "subject": {"system": "did:example", "value": "did:example:patient-demo"},
+        },
+        "encounter_summary_hash": "urn:sha256:demo-sample-hash",
+        "managing_organization": {"system": "urn:medssi:org", "value": "org:demo-hospital"},
+        "issued_on": today.isoformat(),
+        "consent_expires_on": None,
+        "medication_dispense": [],
+    }
+    return CredentialPayload.parse_obj(sample_dict)
+
+
+def _deep_merge(target: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
+    for key, value in updates.items():
+        if value is None:
+            continue
+        if key not in target:
+            target[key] = value
+            continue
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            target[key] = _deep_merge(dict(target[key]), value)
+        else:
+            target[key] = value
+    return target
+
+
+def _coerce_payload(
+    payload: Optional[Union[CredentialPayload, Dict[str, Any]]]
+) -> CredentialPayload:
+    if isinstance(payload, CredentialPayload):
+        return payload
+    sample = _sample_payload()
+    if payload is None:
+        return sample
+    if isinstance(payload, dict):
+        base = sample.dict()
+        merged = _deep_merge(base, payload)
+        try:
+            return CredentialPayload.parse_obj(merged)
+        except ValidationError:
+            return sample
+    try:
+        return CredentialPayload.parse_obj(payload)
+    except ValidationError:
+        return sample
+
+
+def _issue_offer(
+    *,
+    issuer_id: str,
+    primary_scope: DisclosureScope,
+    ial: IdentityAssuranceLevel,
+    mode: IssuanceMode,
+    disclosure_policies: List[DisclosurePolicy],
+    valid_for_minutes: int,
+    holder_did: Optional[str],
+    holder_hint: Optional[str],
+    payload: Optional[CredentialPayload] = None,
+    payload_template: Optional[CredentialPayload] = None,
+    transaction_id: Optional[str] = None,
+) -> Tuple[CredentialOffer, str]:
+    offer = _create_offer(
+        issuer_id=issuer_id,
+        primary_scope=primary_scope,
+        ial=ial,
+        mode=mode,
+        disclosure_policies=disclosure_policies,
+        valid_for_minutes=valid_for_minutes,
+        holder_did=holder_did,
+        holder_hint=holder_hint,
+        payload=payload,
+        payload_template=payload_template,
+        transaction_id=transaction_id,
+    )
+    qr_payload = _build_qr_payload(offer.qr_token, "credential")
+    return offer, qr_payload
+
+
 def _create_offer(
     *,
     issuer_id: str,
@@ -247,10 +512,11 @@ def _create_offer(
     holder_hint: Optional[str] = None,
     payload: Optional[CredentialPayload] = None,
     payload_template: Optional[CredentialPayload] = None,
+    transaction_id: Optional[str] = None,
 ) -> CredentialOffer:
     now = datetime.utcnow()
     credential_id = f"cred-{uuid.uuid4().hex}"
-    transaction_id = str(uuid.uuid4())
+    transaction_id = transaction_id or str(uuid.uuid4())
     nonce = secrets.token_urlsafe(16)
     qr_token = secrets.token_urlsafe(24)
 
@@ -362,27 +628,93 @@ def _touch_retention(offer: CredentialOffer) -> None:
     offer.last_action_at = issued_at
 
 
+def _issue_from_data_request(
+    request: IssuanceWithDataRequest,
+) -> Tuple[CredentialOffer, str]:
+    policies = _resolve_policies(request.disclosure_policies)
+    payload = _coerce_payload(request.payload)
+    holder_did = request.holder_did or "did:example:patient-demo"
+    return _issue_offer(
+        issuer_id=request.issuer_id,
+        primary_scope=request.primary_scope,
+        ial=request.ial,
+        mode=IssuanceMode.WITH_DATA,
+        disclosure_policies=policies,
+        valid_for_minutes=request.valid_for_minutes,
+        holder_did=holder_did,
+        holder_hint=request.holder_hint,
+        payload=payload,
+        transaction_id=request.transaction_id,
+    )
+
+
+def _issue_from_template_request(
+    request: IssuanceWithoutDataRequest,
+) -> Tuple[CredentialOffer, str]:
+    policies = _resolve_policies(request.disclosure_policies)
+    payload_template = (
+        _coerce_payload(request.payload_template)
+        if request.payload_template is not None
+        else None
+    )
+    holder_did = request.holder_did or None
+    return _issue_offer(
+        issuer_id=request.issuer_id,
+        primary_scope=request.primary_scope,
+        ial=request.ial,
+        mode=IssuanceMode.WITHOUT_DATA,
+        disclosure_policies=policies,
+        valid_for_minutes=request.valid_for_minutes,
+        holder_did=holder_did,
+        holder_hint=request.holder_hint,
+        payload_template=payload_template,
+        transaction_id=request.transaction_id,
+    )
+
+
+def _build_issue_response(offer: CredentialOffer, qr_payload: str) -> GovIssueResponse:
+    return GovIssueResponse(
+        transaction_id=offer.transaction_id,
+        qr_code=_make_qr_data_uri(qr_payload),
+        qr_payload=qr_payload,
+        deep_link=_build_deep_link(
+            offer.qr_token,
+            kind="credential",
+            transaction_id=offer.transaction_id,
+        ),
+        credential_id=offer.credential_id,
+        expires_at=offer.expires_at,
+        ial=offer.ial,
+        ial_description=offer.ial_description,
+        scope=offer.primary_scope,
+    )
+
+
+def _build_nonce_response(offer: CredentialOffer) -> GovCredentialNonceResponse:
+    return GovCredentialNonceResponse(
+        transaction_id=offer.transaction_id,
+        credential_id=offer.credential_id,
+        credential_status=offer.status,
+        nonce=offer.nonce,
+        ial=offer.ial,
+        ial_description=offer.ial_description,
+        mode=offer.mode,
+        expires_at=offer.expires_at,
+        payload_available=offer.payload is not None,
+        disclosure_policies=offer.disclosure_policies,
+        payload_template=offer.payload_template,
+        payload=offer.payload,
+        credential=_mock_credential_jwt(offer),
+    )
+
+
 @api_v2.post(
     "/api/qrcode/data",
     response_model=QRCodeResponse,
     dependencies=[Depends(require_issuer_token)],
 )
 def create_qr_with_data(request: IssuanceWithDataRequest) -> QRCodeResponse:
-    _ensure_valid_policies(request.disclosure_policies)
-
-    offer = _create_offer(
-        issuer_id=request.issuer_id,
-        primary_scope=request.primary_scope,
-        ial=request.ial,
-        mode=IssuanceMode.WITH_DATA,
-        disclosure_policies=request.disclosure_policies,
-        valid_for_minutes=request.valid_for_minutes,
-        holder_did=request.holder_did,
-        holder_hint=request.holder_hint,
-        payload=request.payload,
-    )
-
-    qr_payload = _build_qr_payload(offer.qr_token, "credential")
+    offer, qr_payload = _issue_from_data_request(request)
     return QRCodeResponse(credential=offer, qr_payload=qr_payload)
 
 
@@ -392,23 +724,184 @@ def create_qr_with_data(request: IssuanceWithDataRequest) -> QRCodeResponse:
     dependencies=[Depends(require_issuer_token)],
 )
 def create_qr_without_data(request: IssuanceWithoutDataRequest) -> QRCodeResponse:
-    _ensure_valid_policies(request.disclosure_policies)
-
-    offer = _create_offer(
-        issuer_id=request.issuer_id,
-        primary_scope=request.primary_scope,
-        ial=request.ial,
-        mode=IssuanceMode.WITHOUT_DATA,
-        disclosure_policies=request.disclosure_policies,
-        valid_for_minutes=request.valid_for_minutes,
-        holder_did=request.holder_did,
-        holder_hint=request.holder_hint,
-        payload_template=request.payload_template,
-    )
-
-    qr_payload = _build_qr_payload(offer.qr_token, "credential")
+    offer, qr_payload = _issue_from_template_request(request)
     return QRCodeResponse(credential=offer, qr_payload=qr_payload)
 
+
+api_public = APIRouter(prefix="/api", tags=["MODA Sandbox compatibility"])
+
+
+@api_public.post(
+    "/qrcode/data",
+    response_model=GovIssueResponse,
+    status_code=201,
+    dependencies=[Depends(require_issuer_token)],
+)
+def gov_issue_with_data(request: IssuanceWithDataRequest) -> GovIssueResponse:
+    offer, qr_payload = _issue_from_data_request(request)
+    return _build_issue_response(offer, qr_payload)
+
+
+@api_public.post(
+    "/medical/card/issue",
+    response_model=GovIssueResponse,
+    status_code=201,
+    dependencies=[Depends(require_issuer_token)],
+)
+def gov_issue_medical_card(request: IssuanceWithDataRequest) -> GovIssueResponse:
+    offer, qr_payload = _issue_from_data_request(request)
+    return _build_issue_response(offer, qr_payload)
+
+
+@api_public.post(
+    "/qrcode/nodata",
+    response_model=GovIssueResponse,
+    status_code=201,
+    dependencies=[Depends(require_issuer_token)],
+)
+def gov_issue_without_data(request: IssuanceWithoutDataRequest) -> GovIssueResponse:
+    offer, qr_payload = _issue_from_template_request(request)
+    return _build_issue_response(offer, qr_payload)
+
+
+@api_public.get(
+    "/credential/nonce/{transaction_id}",
+    response_model=GovCredentialNonceResponse,
+    dependencies=[Depends(require_wallet_token)],
+)
+def gov_get_nonce(transaction_id: str) -> GovCredentialNonceResponse:
+    offer = store.get_credential_by_transaction(transaction_id)
+    if not offer:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "61010",
+                "message": "指定VC不存在，QR Code尚未被掃描",
+            },
+        )
+    return _build_nonce_response(offer)
+
+
+@api_public.get(
+    "/credential/nonce",
+    response_model=GovCredentialNonceResponse,
+    dependencies=[Depends(require_wallet_token)],
+)
+def gov_get_nonce_query(transactionId: str = Query(..., alias="transactionId")) -> GovCredentialNonceResponse:
+    return gov_get_nonce(transactionId)
+
+
+@api_public.put(
+    "/credential/{credential_id}/{action}",
+    dependencies=[Depends(require_issuer_token)],
+)
+def gov_update_credential(credential_id: str, action: str) -> Dict[str, Any]:
+    if action.lower() != "revocation":
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "61006", "message": "不合法的VC操作類型"},
+        )
+    try:
+        store.revoke_credential(credential_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "61006", "message": "不合法的VC識別碼"},
+        ) from None
+    return {"credentialStatus": CredentialStatus.REVOKED.value, "credentialId": credential_id}
+
+
+@api_public.post(
+    "/oidvp/qrcode",
+    response_model=OIDVPQRCodeResponse,
+    status_code=201,
+    dependencies=[Depends(require_verifier_token)],
+)
+def gov_create_oidvp_qrcode(payload: OIDVPSessionRequest) -> OIDVPQRCodeResponse:
+    fields = payload.fields or []
+    if len(fields) == 1 and "," in fields[0]:
+        fields = [segment.strip() for segment in fields[0].split(",") if segment.strip()]
+    if not fields:
+        fallback_policy = next(
+            (
+                policy
+                for policy in _default_disclosure_policies()
+                if policy.scope == payload.scope
+            ),
+            None,
+        )
+        fields = list(fallback_policy.fields) if fallback_policy else ["condition.code.coding[0].code"]
+
+    now = datetime.utcnow()
+    transaction_id = payload.transaction_id or str(uuid.uuid4())
+    session = VerificationSession(
+        session_id=f"sess-{uuid.uuid4().hex}",
+        transaction_id=transaction_id,
+        verifier_id=payload.verifier_id,
+        verifier_name=payload.verifier_name,
+        purpose=payload.purpose or "憑證驗證",
+        required_ial=payload.ial,
+        scope=payload.scope,
+        allowed_fields=list(dict.fromkeys(fields)),
+        qr_token=secrets.token_urlsafe(24),
+        created_at=now,
+        expires_at=now + timedelta(minutes=payload.valid_minutes),
+        last_polled_at=now,
+        template_ref=payload.ref,
+    )
+    store.persist_verification_session(session)
+    qr_payload = _build_qr_payload(session.qr_token, "vp-session")
+    return OIDVPQRCodeResponse(
+        transaction_id=transaction_id,
+        qrcode_image=_make_qr_data_uri(qr_payload),
+        auth_uri=_build_deep_link(
+            session.qr_token,
+            kind="oidvp",
+            transaction_id=transaction_id,
+        ),
+        qr_payload=qr_payload,
+        scope=session.scope,
+        ial=session.required_ial,
+        expires_at=session.expires_at,
+    )
+
+
+@api_public.post(
+    "/oidvp/result",
+    response_model=OIDVPResultResponse,
+    dependencies=[Depends(require_verifier_token)],
+)
+def gov_fetch_oidvp_result(payload: OIDVPResultRequest) -> OIDVPResultResponse:
+    session = store.get_verification_session_by_transaction(payload.transaction_id)
+    if not session:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "404", "message": "查無交易紀錄"},
+        )
+    result = store.latest_result_for_session(session.session_id)
+    if not result:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "400", "message": "尚未接收到使用者上傳資料"},
+        )
+    session.last_polled_at = datetime.utcnow()
+    store.persist_verification_session(session)
+    claims = [
+        {
+            "credentialType": "MedSSI.VerifiableCredential",
+            "claims": [
+                {"ename": field, "cname": field, "value": value}
+                for field, value in result.presentation.disclosed_fields.items()
+            ],
+        }
+    ]
+    description = "success" if result.verified else "failed"
+    return OIDVPResultResponse(
+        verify_result=result.verified,
+        result_description=description,
+        transaction_id=payload.transaction_id,
+        data=claims,
+    )
 
 @api_v2.post(
     "/api/credentials/{credential_id}/revoke",
@@ -764,6 +1257,7 @@ def reset_sandbox_state() -> ResetResponse:
     return ResetResponse(message="MedSSI in-memory store reset", timestamp=datetime.utcnow())
 
 
+app.include_router(api_public)
 app.include_router(api_v2)
 
 

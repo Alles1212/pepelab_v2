@@ -21,6 +21,7 @@ class InMemoryStore:
         self._credentials: Dict[str, CredentialOffer] = {}
         self._transaction_index: Dict[str, str] = {}
         self._verification_sessions: Dict[str, VerificationSession] = {}
+        self._session_index: Dict[str, str] = {}
         self._presentations: Dict[str, Presentation] = {}
         self._results: Dict[str, VerificationResult] = {}
 
@@ -62,8 +63,18 @@ class InMemoryStore:
     # Verification session lifecycle --------------------------------------
     def persist_verification_session(self, session: VerificationSession) -> None:
         self._verification_sessions[session.session_id] = session
+        if session.transaction_id:
+            self._session_index[session.transaction_id] = session.session_id
 
     def get_verification_session(self, session_id: str) -> Optional[VerificationSession]:
+        return self._verification_sessions.get(session_id)
+
+    def get_verification_session_by_transaction(
+        self, transaction_id: str
+    ) -> Optional[VerificationSession]:
+        session_id = self._session_index.get(transaction_id)
+        if not session_id:
+            return None
         return self._verification_sessions.get(session_id)
 
     def list_active_sessions(self, verifier_id: Optional[str] = None) -> List[VerificationSession]:
@@ -102,6 +113,17 @@ class InMemoryStore:
         key = f"{session_id}:{presentation_id}"
         return self._results.get(key)
 
+    def latest_result_for_session(self, session_id: str) -> Optional[VerificationResult]:
+        candidates = [
+            result
+            for key, result in self._results.items()
+            if key.startswith(f"{session_id}:")
+        ]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda res: res.presentation.issued_at, reverse=True)
+        return candidates[0]
+
     # Forget / right-to-be-forgotten --------------------------------------
     def forget_holder(self, holder_did: str) -> ForgetSummary:
         credential_ids = [
@@ -138,7 +160,9 @@ class InMemoryStore:
         )
 
     def purge_session(self, session_id: str) -> None:
-        self._verification_sessions.pop(session_id, None)
+        session = self._verification_sessions.pop(session_id, None)
+        if session and session.transaction_id:
+            self._session_index.pop(session.transaction_id, None)
         presentations_to_remove = [
             pid
             for pid, presentation in self._presentations.items()
