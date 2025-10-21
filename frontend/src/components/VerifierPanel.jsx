@@ -13,21 +13,29 @@ const DEFAULT_FIELDS = {
     'medication_dispense[0].days_supply',
     'medication_dispense[0].pickup_window_end',
   ],
+  RESEARCH_ANALYTICS: ['condition.code.coding[0].code', 'encounter_summary_hash'],
 };
 
 function buildSamplePresentation(scope) {
-  if (scope === 'MEDICAL_RECORD') {
-    return {
-      'condition.code.coding[0].code': 'K29.7',
-      'condition.recordedDate': dayjs().format('YYYY-MM-DD'),
-      'managing_organization.value': 'org:tph-001',
-    };
+  switch (scope) {
+    case 'MEDICATION_PICKUP':
+      return {
+        'medication_dispense[0].medicationCodeableConcept.coding[0].code': 'A02BC05',
+        'medication_dispense[0].days_supply': '30',
+        'medication_dispense[0].pickup_window_end': dayjs().add(7, 'day').format('YYYY-MM-DD'),
+      };
+    case 'RESEARCH_ANALYTICS':
+      return {
+        'condition.code.coding[0].code': 'K29.7',
+        'encounter_summary_hash': 'urn:sha256:samplehash123',
+      };
+    default:
+      return {
+        'condition.code.coding[0].code': 'K29.7',
+        'condition.recordedDate': dayjs().format('YYYY-MM-DD'),
+        'managing_organization.value': 'org:tph-001',
+      };
   }
-  return {
-    'medication_dispense[0].medicationCodeableConcept.coding[0].code': 'A02BC05',
-    'medication_dispense[0].days_supply': '30',
-    'medication_dispense[0].pickup_window_end': dayjs().add(7, 'day').format('YYYY-MM-DD'),
-  };
 }
 
 export function VerifierPanel({ client, verifierToken }) {
@@ -39,6 +47,7 @@ export function VerifierPanel({ client, verifierToken }) {
   const [fieldsText, setFieldsText] = useState(DEFAULT_FIELDS.MEDICAL_RECORD.join(', '));
   const [validMinutes, setValidMinutes] = useState(5);
   const [session, setSession] = useState(null);
+  const [qrPayload, setQrPayload] = useState(null);
   const [sessionError, setSessionError] = useState(null);
   const [presentationFields, setPresentationFields] = useState({});
   const [credentialId, setCredentialId] = useState('');
@@ -60,14 +69,15 @@ export function VerifierPanel({ client, verifierToken }) {
   async function createSession() {
     setSessionError(null);
     setResult(null);
+    setQrPayload(null);
     const response = await client.createVerificationCode(
       {
-        verifier_id: verifierId,
-        verifier_name: verifierName,
+        verifierId,
+        verifierName,
         purpose,
-        ial,
+        ial_min: ial,
         scope,
-        fields: allowedFields.join(','),
+        fields: allowedFields,
         validMinutes,
       },
       verifierToken
@@ -80,6 +90,7 @@ export function VerifierPanel({ client, verifierToken }) {
     }
 
     setSession(response.data.session);
+    setQrPayload(response.data.qr_payload);
     setPresentationFields(buildSamplePresentation(scope));
     setResult(null);
   }
@@ -107,7 +118,6 @@ export function VerifierPanel({ client, verifierToken }) {
         session_id: session.session_id,
         credential_id: credentialId,
         holder_did: holderDid,
-        scope,
         disclosed_fields: presentationFields,
       },
       verifierToken
@@ -129,24 +139,24 @@ export function VerifierPanel({ client, verifierToken }) {
     }
     await client.purgeSession(session.session_id, verifierToken);
     setSession(null);
+    setQrPayload(null);
     setResult(null);
     setSessionError(null);
   }
-
-  const qrPayload = session ? `medssi://verification?token=${session.qr_token}` : null;
 
   return (
     <section aria-labelledby="verifier-heading">
       <h2 id="verifier-heading">Step 3 – 驗證端</h2>
       <div className="alert info">
-        驗證端可依用途選擇病歷或領藥流程。系統會檢查 IAL、欄位與 FHIR Payload 是否符合授權範圍，再提供 AI Insight。
+        驗證端需以 Access Token 產生一次性的掃碼 Session，支援病歷、領藥與研究三種範疇。
+        提交 VP 後會同步回傳 AI Insight 與稽核資訊。
       </div>
 
       <div className="grid two">
         <div className="card">
           <label htmlFor="verifier-token">驗證端 Access Token</label>
           <input id="verifier-token" type="text" value={verifierToken} readOnly aria-readonly="true" />
-          <small className="helper">沙盒預設為 verifier-sandbox-token，請勿在公開環境顯示實際 Token。</small>
+          <small className="helper">沙盒預設 verifier-sandbox-token。</small>
 
           <label htmlFor="verifier-id">驗證者 DID</label>
           <input
@@ -169,6 +179,7 @@ export function VerifierPanel({ client, verifierToken }) {
           <select id="scope" value={scope} onChange={(event) => setScope(event.target.value)}>
             <option value="MEDICAL_RECORD">病歷摘要授權</option>
             <option value="MEDICATION_PICKUP">領藥流程驗證</option>
+            <option value="RESEARCH_ANALYTICS">研究合作（匿名摘要）</option>
           </select>
 
           <label htmlFor="ial-required">所需 IAL</label>
@@ -200,75 +211,73 @@ export function VerifierPanel({ client, verifierToken }) {
           />
 
           <button type="button" onClick={createSession}>
-            建立驗證 QR
+            產生驗證 QR Code
           </button>
           <button type="button" className="secondary" onClick={purgeSession}>
-            清除 Session
+            取消 Session
           </button>
+
           {sessionError ? <div className="alert error">{sessionError}</div> : null}
         </div>
 
         <div className="card">
-          <h3>提交 VP</h3>
-          <label htmlFor="credential-id">Credential ID</label>
-          <input
-            id="credential-id"
-            value={credentialId}
-            onChange={(event) => setCredentialId(event.target.value)}
-            placeholder="請輸入錢包中的 credential_id"
-          />
-
-          <label htmlFor="holder-did-verifier">Holder DID</label>
-          <input
-            id="holder-did-verifier"
-            value={holderDid}
-            onChange={(event) => setHolderDid(event.target.value)}
-          />
-
-          {allowedFields.map((field) => (
-            <div key={field}>
-              <label htmlFor={`field-${field}`}>{field}</label>
-              <input
-                id={`field-${field}`}
-                value={presentationFields[field] ?? ''}
-                onChange={(event) => updatePresentationField(field, event.target.value)}
-              />
+          <h3>掃碼資訊</h3>
+          {qrPayload ? (
+            <div className="qr-container" aria-label="Verifier QR">
+              <QRCodeCanvas value={qrPayload} size={192} includeMargin />
+              <p>Session ID：{session.session_id}</p>
+              <p>到期：{new Date(session.expires_at).toLocaleString()}</p>
             </div>
-          ))}
-
-          <button type="button" onClick={submitPresentation} disabled={loading}>
-            {loading ? '送出中…' : '送出 Verifiable Presentation'}
-          </button>
-
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => setPresentationFields(buildSamplePresentation(scope))}
-          >
-            載入示例資料
-          </button>
-
-          {resultError ? <div className="alert error">{resultError}</div> : null}
+          ) : (
+            <p>尚未建立驗證 Session。</p>
+          )}
         </div>
       </div>
 
-      {session ? (
-        <div className="card">
-          <h3>驗證 QR</h3>
-          <p>Session：{session.session_id}</p>
-          <div className="qr-container" aria-label="驗證 QR Code">
-            <QRCodeCanvas value={qrPayload} size={192} includeMargin />
-          </div>
-          <pre>{JSON.stringify(session, null, 2)}</pre>
-        </div>
-      ) : null}
+      <div className="card">
+        <h3>提交 Verifiable Presentation</h3>
+        <label htmlFor="credential-id">Credential ID</label>
+        <input
+          id="credential-id"
+          value={credentialId}
+          onChange={(event) => setCredentialId(event.target.value)}
+          placeholder="例如 cred-xxxx"
+        />
 
-      {result ? (
-        <div className="card">
-          <h3>AI Insight</h3>
-          <pre>{JSON.stringify(result, null, 2)}</pre>
-        </div>
-      ) : null}
+        <label htmlFor="holder-did">持卡者 DID</label>
+        <input
+          id="holder-did"
+          value={holderDid}
+          onChange={(event) => setHolderDid(event.target.value)}
+        />
+
+        <label>揭露欄位內容</label>
+        {allowedFields.map((field) => (
+          <div key={field} className="field-row">
+            <span>{field}</span>
+            <input
+              value={presentationFields[field] ?? ''}
+              onChange={(event) => updatePresentationField(field, event.target.value)}
+            />
+          </div>
+        ))}
+
+        <button type="button" onClick={submitPresentation} disabled={loading}>
+          {loading ? '驗證中…' : '提交 VP'}
+        </button>
+
+        {resultError ? <div className="alert error">{resultError}</div> : null}
+        {result ? (
+          <div className="alert success" role="status">
+            <p>驗證結果：{result.result.verified ? '通過' : '未通過'}</p>
+            <p>AI 風險分數：{result.insight.gastritis_risk_score}</p>
+            <details>
+              <summary>完整回應</summary>
+              <pre>{JSON.stringify(result, null, 2)}</pre>
+            </details>
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }

@@ -8,7 +8,40 @@ const ACTION_LABELS = {
   UPDATE: '更新 Payload',
 };
 
-export function WalletPanel({ client, baseUrl }) {
+function resolvePath(source, path) {
+  if (!source) return null;
+  const segments = path.split('.');
+  let current = source;
+  for (const segment of segments) {
+    if (!segment) continue;
+    const match = segment.match(/^(\w+)(\[(\d+)\])?$/);
+    if (!match) {
+      current = current?.[segment];
+      continue;
+    }
+    const [, key, , index] = match;
+    current = current?.[key];
+    if (index !== undefined) {
+      const idx = Number(index);
+      if (!Array.isArray(current) || idx >= current.length) {
+        return null;
+      }
+      current = current[idx];
+    }
+    if (current === undefined || current === null) {
+      return null;
+    }
+  }
+  if (current === undefined || current === null) {
+    return null;
+  }
+  if (typeof current === 'object') {
+    return JSON.stringify(current);
+  }
+  return String(current);
+}
+
+export function WalletPanel({ client, baseUrl, walletToken }) {
   const [transactionId, setTransactionId] = useState('');
   const [nonceInfo, setNonceInfo] = useState(null);
   const [nonceError, setNonceError] = useState(null);
@@ -32,12 +65,24 @@ export function WalletPanel({ client, baseUrl }) {
       setNonceError('請輸入交易編號');
       return;
     }
-    const response = await client.getNonce(transactionId);
+    const response = await client.getNonce(transactionId, walletToken);
     if (!response.ok) {
       setNonceError(`(${response.status}) ${response.detail}`);
       return;
     }
     setNonceInfo(response.data);
+  }
+
+  function parsePayloadDraft() {
+    if (!payloadDraft) {
+      return null;
+    }
+    try {
+      return JSON.parse(payloadDraft);
+    } catch (error) {
+      setActionError('Payload 不是合法的 JSON');
+      return null;
+    }
   }
 
   async function runAction() {
@@ -57,21 +102,38 @@ export function WalletPanel({ client, baseUrl }) {
           setActionError('此憑證需要提供 FHIR Payload');
           return;
         }
-        try {
-          payload = JSON.parse(payloadDraft);
-        } catch (error) {
+        const parsed = parsePayloadDraft();
+        if (!parsed) {
           setLoading(false);
-          setActionError('Payload 不是合法的 JSON');
           return;
         }
+        payload = parsed;
       }
     }
 
-    const response = await client.actOnCredential(credentialId, {
-      action,
-      holder_did: holderDid,
-      payload,
-    });
+    const disclosures = {};
+    const disclosureSource = payload || nonceInfo?.payload_template;
+    if (nonceInfo?.disclosure_policies && disclosureSource) {
+      nonceInfo.disclosure_policies.forEach((policy) => {
+        policy.fields.forEach((field) => {
+          const value = resolvePath(disclosureSource, field);
+          if (value !== null && value !== undefined) {
+            disclosures[field] = value;
+          }
+        });
+      });
+    }
+
+    const response = await client.actOnCredential(
+      credentialId,
+      {
+        action,
+        holder_did: holderDid,
+        payload,
+        disclosures,
+      },
+      walletToken
+    );
 
     setLoading(false);
     if (!response.ok) {
@@ -88,7 +150,7 @@ export function WalletPanel({ client, baseUrl }) {
 
   async function listWalletCredentials() {
     setListError(null);
-    const response = await client.listHolderCredentials(holderDid);
+    const response = await client.listHolderCredentials(holderDid, walletToken);
     if (!response.ok) {
       setListError(`(${response.status}) ${response.detail}`);
       setCredentials([]);
@@ -99,7 +161,7 @@ export function WalletPanel({ client, baseUrl }) {
 
   async function forgetHolderData() {
     setForgetResult(null);
-    const response = await client.forgetHolder(holderDid);
+    const response = await client.forgetHolder(holderDid, walletToken);
     if (!response.ok) {
       setForgetResult({ error: `(${response.status}) ${response.detail}` });
       return;
@@ -116,11 +178,15 @@ export function WalletPanel({ client, baseUrl }) {
       <h2 id="wallet-heading">Step 2 – 病患錢包</h2>
       <p className="badge">API Base URL：{baseUrl}</p>
       <div className="alert info">
-        錢包先以交易編號查詢 nonce 與揭露政策，再決定是否接受。此區亦示範可遺忘權與憑證列表。
+        錢包需驗證 Wallet Access Token（預設 wallet-sandbox-token），系統將記錄 selective disclosure。
+        可透過下方按鈕檢視錢包內的憑證並行使可遺忘權。
       </div>
 
       <div className="grid two">
         <div className="card">
+          <label htmlFor="wallet-token">Wallet Access Token</label>
+          <input id="wallet-token" value={walletToken} readOnly aria-readonly="true" />
+
           <label htmlFor="transaction-id">交易編號 (transaction_id)</label>
           <input
             id="transaction-id"
@@ -183,7 +249,7 @@ export function WalletPanel({ client, baseUrl }) {
         </div>
 
         <div className="card">
-          <h3>已揭露欄位</h3>
+          <h3>揭露政策與範例</h3>
           {nonceInfo ? (
             <>
               <p>模式：{nonceInfo.mode}</p>
@@ -199,44 +265,44 @@ export function WalletPanel({ client, baseUrl }) {
                   </ul>
                 </div>
               ))}
+              {nonceInfo.payload_template ? (
+                <details>
+                  <summary>發行端提供的 FHIR Template</summary>
+                  <pre>{JSON.stringify(nonceInfo.payload_template, null, 2)}</pre>
+                </details>
+              ) : null}
             </>
           ) : (
-            <p>尚未取得 nonce</p>
+            <p>請先輸入交易編號取得 nonce。</p>
           )}
-
-          <h3>錢包工具</h3>
-          <button type="button" onClick={listWalletCredentials}>
-            查看我的憑證
-          </button>
-          <button type="button" className="secondary" onClick={forgetHolderData}>
-            清除我的資料（可遺忘權）
-          </button>
-          {listError ? <div className="alert error">{listError}</div> : null}
-          {forgetResult ? (
-            forgetResult.error ? (
-              <div className="alert error">{forgetResult.error}</div>
-            ) : (
-              <div className="alert success">
-                已刪除 {forgetResult.credentials_removed} 筆憑證與 {forgetResult.presentations_removed} 筆 VP。
-              </div>
-            )
-          ) : null}
         </div>
       </div>
 
-      {credentials.length ? (
-        <div className="card">
-          <h3>錢包憑證列表</h3>
-          <pre>{JSON.stringify(credentials, null, 2)}</pre>
-        </div>
-      ) : null}
-
-      {actionResult ? (
-        <div className="card">
-          <h3>最新憑證狀態</h3>
-          <pre>{JSON.stringify(actionResult, null, 2)}</pre>
-        </div>
-      ) : null}
+      <div className="card">
+        <h3>錢包內的憑證</h3>
+        <button type="button" onClick={listWalletCredentials}>
+          查看我的憑證列表
+        </button>
+        {listError ? <div className="alert error">{listError}</div> : null}
+        {credentials.length ? (
+          <ul>
+            {credentials.map((credential) => (
+              <li key={credential.credential_id}>
+                <strong>{credential.credential_id}</strong> – 狀態：{credential.status} –
+                主用途：{credential.primary_scope}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>尚無資料或尚未載入。</p>
+        )}
+        <button type="button" className="secondary" onClick={forgetHolderData}>
+          行使可遺忘權（清除錢包資料）
+        </button>
+        {forgetResult ? (
+          <pre>{JSON.stringify(forgetResult, null, 2)}</pre>
+        ) : null}
+      </div>
     </section>
   );
 }

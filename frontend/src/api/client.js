@@ -22,10 +22,12 @@ export function createClient(baseUrl) {
     }
   }
 
+  const prefix = '/v2';
+
   return {
     issueWithData: (payload, token) =>
       request({
-        url: '/api/qrcode/data',
+        url: `${prefix}/api/qrcode/data`,
         method: 'POST',
         data: payload,
         headers: token
@@ -36,7 +38,7 @@ export function createClient(baseUrl) {
       }),
     issueWithoutData: (payload, token) =>
       request({
-        url: '/api/qrcode/nodata',
+        url: `${prefix}/api/qrcode/nodata`,
         method: 'POST',
         data: payload,
         headers: token
@@ -45,21 +47,31 @@ export function createClient(baseUrl) {
             }
           : undefined,
       }),
-    getNonce: (transactionId) =>
+    getNonce: (transactionId, token) =>
       request({
-        url: '/api/credential/nonce',
+        url: `${prefix}/api/credential/nonce`,
         method: 'GET',
         params: { transactionId },
+        headers: token
+          ? {
+              Authorization: `Bearer ${token}`,
+            }
+          : undefined,
       }),
-    actOnCredential: (credentialId, actionPayload) =>
+    actOnCredential: (credentialId, actionPayload, token) =>
       request({
-        url: `/api/credential/${credentialId}/action`,
+        url: `${prefix}/api/credential/${credentialId}/action`,
         method: 'PUT',
         data: actionPayload,
+        headers: token
+          ? {
+              Authorization: `Bearer ${token}`,
+            }
+          : undefined,
       }),
     revokeCredential: (credentialId, token) =>
       request({
-        url: `/api/credentials/${credentialId}/revoke`,
+        url: `${prefix}/api/credentials/${credentialId}/revoke`,
         method: 'POST',
         headers: token
           ? {
@@ -69,7 +81,7 @@ export function createClient(baseUrl) {
       }),
     deleteCredential: (credentialId, token) =>
       request({
-        url: `/api/credentials/${credentialId}`,
+        url: `${prefix}/api/credentials/${credentialId}`,
         method: 'DELETE',
         headers: token
           ? {
@@ -77,19 +89,29 @@ export function createClient(baseUrl) {
             }
           : undefined,
       }),
-    listHolderCredentials: (holderDid) =>
+    listHolderCredentials: (holderDid, token) =>
       request({
-        url: `/api/wallet/${encodeURIComponent(holderDid)}/credentials`,
+        url: `${prefix}/api/wallet/${encodeURIComponent(holderDid)}/credentials`,
         method: 'GET',
+        headers: token
+          ? {
+              Authorization: `Bearer ${token}`,
+            }
+          : undefined,
       }),
-    forgetHolder: (holderDid) =>
+    forgetHolder: (holderDid, token) =>
       request({
-        url: `/api/wallet/${encodeURIComponent(holderDid)}/forget`,
+        url: `${prefix}/api/wallet/${encodeURIComponent(holderDid)}/forget`,
         method: 'DELETE',
+        headers: token
+          ? {
+              Authorization: `Bearer ${token}`,
+            }
+          : undefined,
       }),
     createVerificationCode: (params, token) =>
       request({
-        url: '/api/did/vp/code',
+        url: `${prefix}/api/did/vp/code`,
         method: 'GET',
         params,
         headers: token
@@ -100,7 +122,7 @@ export function createClient(baseUrl) {
       }),
     submitPresentation: (payload, token) =>
       request({
-        url: '/api/did/vp/result',
+        url: `${prefix}/api/did/vp/result`,
         method: 'POST',
         data: payload,
         headers: token
@@ -111,8 +133,18 @@ export function createClient(baseUrl) {
       }),
     purgeSession: (sessionId, token) =>
       request({
-        url: `/api/did/vp/session/${sessionId}`,
+        url: `${prefix}/api/did/vp/session/${sessionId}`,
         method: 'DELETE',
+        headers: token
+          ? {
+              Authorization: `Bearer ${token}`,
+            }
+          : undefined,
+      }),
+    resetSandbox: (token) =>
+      request({
+        url: `${prefix}/api/system/reset`,
+        method: 'POST',
         headers: token
           ? {
               Authorization: `Bearer ${token}`,

@@ -7,10 +7,10 @@ from .models import DisclosureScope, Presentation, RiskInsight
 
 
 class InsightEngine:
-    """Deterministic analytics engine supporting both medical record and medication pickup scopes."""
+    """Deterministic analytics for demo purposes."""
 
     def evaluate(self, presentation: Presentation) -> RiskInsight:
-        if presentation.scope == DisclosureScope.MEDICAL_RECORD:
+        if presentation.scope in {DisclosureScope.MEDICAL_RECORD, DisclosureScope.RESEARCH_ANALYTICS}:
             return self._medical_record_insight(presentation)
         return self._medication_pickup_insight(presentation)
 

@@ -119,6 +119,10 @@ button:not(:disabled):hover {
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
 
+.grid.three {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
 .stack {
   display: flex;
   flex-direction: column;
@@ -142,6 +146,24 @@ button:not(:disabled):hover {
   background: #f7faff;
   border: 1px solid #d9e6ff;
   padding: 1rem;
+}
+
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.field-row span {
+  flex: 0 0 220px;
+  font-size: 0.9rem;
+  color: #17427d;
+}
+
+.field-row input {
+  flex: 1;
+  margin-bottom: 0;
 }
 
 small.helper {

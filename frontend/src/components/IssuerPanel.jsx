@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import dayjs from 'dayjs';
 import { QRCodeCanvas } from 'qrcode.react';
 
@@ -13,7 +13,23 @@ const DEFAULT_DISCLOSURES = {
     'medication_dispense[0].days_supply',
     'medication_dispense[0].pickup_window_end',
   ],
+  RESEARCH_ANALYTICS: ['condition.code.coding[0].code', 'encounter_summary_hash'],
 };
+
+const PRIMARY_SCOPE_OPTIONS = [
+  {
+    value: 'MEDICAL_RECORD',
+    label: '病歷卡（MEDICAL_RECORD）－7 天後自動封存',
+  },
+  {
+    value: 'MEDICATION_PICKUP',
+    label: '領藥卡（MEDICATION_PICKUP）－3 天後自動刪除',
+  },
+  {
+    value: 'RESEARCH_ANALYTICS',
+    label: '研究卡（RESEARCH_ANALYTICS）－30 天匿名化保留',
+  },
+];
 
 const INITIAL_CONDITION = {
   id: `cond-${Math.random().toString(36).slice(2, 8)}`,
@@ -113,6 +129,7 @@ export function IssuerPanel({ client, issuerToken, baseUrl }) {
   const [holderHint, setHolderHint] = useState('張小華 1962/07/18');
   const [ial, setIal] = useState('NHI_CARD_PIN');
   const [validMinutes, setValidMinutes] = useState(5);
+  const [primaryScope, setPrimaryScope] = useState('MEDICAL_RECORD');
   const [condition, setCondition] = useState(INITIAL_CONDITION);
   const [includeMedication, setIncludeMedication] = useState(true);
   const [medication, setMedication] = useState(INITIAL_MEDICATION);
@@ -126,36 +143,56 @@ export function IssuerPanel({ client, issuerToken, baseUrl }) {
   const [medicationFields, setMedicationFields] = useState(
     DEFAULT_DISCLOSURES.MEDICATION_PICKUP.join(', ')
   );
+  const [researchFields, setResearchFields] = useState(
+    DEFAULT_DISCLOSURES.RESEARCH_ANALYTICS.join(', ')
+  );
   const [mode, setMode] = useState('WITH_DATA');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
 
-  const disclosurePolicies = useMemo(() => {
-    const map = new Map();
-    map.set('MEDICAL_RECORD', medicalFields.split(',').map((f) => f.trim()).filter(Boolean));
-    map.set(
-      'MEDICATION_PICKUP',
-      medicationFields.split(',').map((f) => f.trim()).filter(Boolean)
-    );
-    return Array.from(map.entries())
-      .filter(([, fields]) => fields.length)
-      .map(([scope, fields]) => ({ scope, fields }));
-  }, [medicalFields, medicationFields]);
-
-  const payload = useMemo(() => {
-    if (mode === 'WITHOUT_DATA') {
-      return null;
+  useEffect(() => {
+    if (primaryScope === 'MEDICATION_PICKUP' && !includeMedication) {
+      setIncludeMedication(true);
     }
-    return buildPayload({
+  }, [primaryScope, includeMedication]);
+
+  const disclosurePolicies = useMemo(() => {
+    const entries = [
+      ['MEDICAL_RECORD', medicalFields],
+      ['MEDICATION_PICKUP', medicationFields],
+      ['RESEARCH_ANALYTICS', researchFields],
+    ];
+    return entries
+      .map(([scope, value]) => ({
+        scope,
+        fields: value
+          .split(',')
+          .map((field) => field.trim())
+          .filter(Boolean),
+      }))
+      .filter((item) => item.fields.length);
+  }, [medicalFields, medicationFields, researchFields]);
+
+  const payloadTemplate = useMemo(
+    () =>
+      buildPayload({
+        condition,
+        includeMedication: includeMedication || primaryScope === 'MEDICATION_PICKUP',
+        medication,
+        encounterHash,
+        issuedOn: dayjs().format('YYYY-MM-DD'),
+        consentExpiry: consentExpiry || null,
+      }),
+    [
       condition,
       includeMedication,
       medication,
       encounterHash,
-      issuedOn: dayjs().format('YYYY-MM-DD'),
-      consentExpiry: consentExpiry || null,
-    });
-  }, [mode, condition, includeMedication, medication, encounterHash, consentExpiry]);
+      consentExpiry,
+      primaryScope,
+    ]
+  );
 
   function updateCondition(field, value) {
     setCondition((prev) => ({ ...prev, [field]: value }));
@@ -173,6 +210,7 @@ export function IssuerPanel({ client, issuerToken, baseUrl }) {
     const requestBody = {
       issuer_id: issuerId,
       ial,
+      primary_scope: primaryScope,
       disclosure_policies: disclosurePolicies.map((policy) => ({
         scope: policy.scope,
         fields: policy.fields,
@@ -183,9 +221,9 @@ export function IssuerPanel({ client, issuerToken, baseUrl }) {
 
     if (mode === 'WITH_DATA') {
       requestBody.holder_did = holderDid || undefined;
-      requestBody.payload = payload;
+      requestBody.payload = payloadTemplate;
     } else {
-      requestBody.payload_template = payload || undefined;
+      requestBody.payload_template = payloadTemplate || undefined;
       requestBody.holder_did = holderDid || undefined;
     }
 
@@ -209,6 +247,7 @@ export function IssuerPanel({ client, issuerToken, baseUrl }) {
     setConsentExpiry(dayjs().add(90, 'day').format('YYYY-MM-DD'));
     setMedicalFields(DEFAULT_DISCLOSURES.MEDICAL_RECORD.join(', '));
     setMedicationFields(DEFAULT_DISCLOSURES.MEDICATION_PICKUP.join(', '));
+    setResearchFields(DEFAULT_DISCLOSURES.RESEARCH_ANALYTICS.join(', '));
   }
 
   return (
@@ -216,22 +255,16 @@ export function IssuerPanel({ client, issuerToken, baseUrl }) {
       <h2 id="issuer-heading">Step 1 – 醫院發行端</h2>
       <p className="badge">API Base URL：{baseUrl}</p>
       <div className="alert info">
-        先輸入發行端 Access Token，再依照需求建立含資料或無資料的 QR Code。QR
-        payload 會轉成實際可掃描的圖像，時效 5 分鐘。
+        根據醫療法與個資法規範，請先驗證身分再簽發病歷／領藥卡。QR Code 僅有效 5 分鐘，
+        逾期會自動失效並需重新發行。
       </div>
 
       <div className="grid two">
         <div className="card">
           <label htmlFor="issuer-token">發行端 Access Token</label>
-          <input
-            id="issuer-token"
-            type="text"
-            value={issuerToken}
-            readOnly
-            aria-readonly="true"
-          />
+          <input id="issuer-token" type="text" value={issuerToken} readOnly aria-readonly="true" />
           <small className="helper">
-            於正式環境請改以安全保管的 Token；此沙盒預設為 issuer-sandbox-token。
+            測試環境預設為 issuer-sandbox-token，正式系統請以 Vault 或 HSM 安全保存。
           </small>
 
           <label htmlFor="issuer-id">發行者 DID</label>
@@ -254,6 +287,19 @@ export function IssuerPanel({ client, issuerToken, baseUrl }) {
             value={holderHint}
             onChange={(event) => setHolderHint(event.target.value)}
           />
+
+          <label htmlFor="primary-scope">憑證主用途</label>
+          <select
+            id="primary-scope"
+            value={primaryScope}
+            onChange={(event) => setPrimaryScope(event.target.value)}
+          >
+            {PRIMARY_SCOPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
 
           <label htmlFor="ial">身份保證等級</label>
           <select id="ial" value={ial} onChange={(event) => setIal(event.target.value)}>
@@ -292,22 +338,25 @@ export function IssuerPanel({ client, issuerToken, baseUrl }) {
                 checked={mode === 'WITHOUT_DATA'}
                 onChange={() => setMode('WITHOUT_DATA')}
               />
-              無資料：僅定義欄位，錢包後補
+              無資料：僅定義欄位，由錢包補齊
             </label>
           </div>
 
           <button type="button" onClick={submit} disabled={loading}>
-            {loading ? '發卡中…' : mode === 'WITH_DATA' ? '建立含資料 QR Code' : '建立空白 QR Code'}
+            {loading
+              ? '發卡中…'
+              : mode === 'WITH_DATA'
+              ? '建立含資料 QR Code'
+              : '建立空白 QR Code'}
           </button>
           <button type="button" className="secondary" onClick={loadSample} disabled={loading}>
             載入示例資料
           </button>
 
           {error ? <div className="alert error">{error}</div> : null}
-
           {success ? (
             <div className="alert success" role="status">
-              已建立憑證（credential_id: {success.credential.credential_id}）。請於 5 分鐘內掃描 QR。
+              已建立憑證（credential_id: {success.credential.credential_id}）。請於 5 分鐘內掃描。
             </div>
           ) : null}
         </div>
@@ -370,35 +419,42 @@ export function IssuerPanel({ client, issuerToken, baseUrl }) {
           <fieldset>
             <legend>
               領藥摘要
-              <label style={{ fontSize: '0.85rem', marginLeft: '0.5rem' }}>
-                <input
-                  type="checkbox"
-                  checked={includeMedication}
-                  onChange={(event) => setIncludeMedication(event.target.checked)}
-                />
-                加入領藥資訊
-              </label>
+              <span className="helper" style={{ display: 'block' }}>
+                {primaryScope === 'MEDICATION_PICKUP'
+                  ? '此類卡片預設保留 3 天後自動刪除。'
+                  : '可選擇是否附上領藥資訊。'}
+              </span>
             </legend>
+            <label htmlFor="include-med">
+              <input
+                id="include-med"
+                type="checkbox"
+                checked={includeMedication || primaryScope === 'MEDICATION_PICKUP'}
+                onChange={(event) => setIncludeMedication(event.target.checked)}
+                disabled={primaryScope === 'MEDICATION_PICKUP'}
+              />
+              加入領藥資訊
+            </label>
             <label htmlFor="med-code">ATC Code</label>
             <input
               id="med-code"
               value={medication.code}
               onChange={(event) => updateMedication('code', event.target.value)}
-              disabled={!includeMedication}
+              disabled={!includeMedication && primaryScope !== 'MEDICATION_PICKUP'}
             />
             <label htmlFor="med-display">藥品名稱</label>
             <input
               id="med-display"
               value={medication.display}
               onChange={(event) => updateMedication('display', event.target.value)}
-              disabled={!includeMedication}
+              disabled={!includeMedication && primaryScope !== 'MEDICATION_PICKUP'}
             />
             <label htmlFor="quantity-text">劑量資訊</label>
             <input
               id="quantity-text"
               value={medication.quantityText}
               onChange={(event) => updateMedication('quantityText', event.target.value)}
-              disabled={!includeMedication}
+              disabled={!includeMedication && primaryScope !== 'MEDICATION_PICKUP'}
             />
             <label htmlFor="days-supply">用藥天數</label>
             <input
@@ -406,7 +462,7 @@ export function IssuerPanel({ client, issuerToken, baseUrl }) {
               type="number"
               value={medication.daysSupply}
               onChange={(event) => updateMedication('daysSupply', event.target.value)}
-              disabled={!includeMedication}
+              disabled={!includeMedication && primaryScope !== 'MEDICATION_PICKUP'}
             />
             <label htmlFor="pickup-end">取藥期限</label>
             <input
@@ -414,7 +470,7 @@ export function IssuerPanel({ client, issuerToken, baseUrl }) {
               type="date"
               value={medication.pickupWindowEnd}
               onChange={(event) => updateMedication('pickupWindowEnd', event.target.value)}
-              disabled={!includeMedication}
+              disabled={!includeMedication && primaryScope !== 'MEDICATION_PICKUP'}
             />
           </fieldset>
 
@@ -432,6 +488,12 @@ export function IssuerPanel({ client, issuerToken, baseUrl }) {
               value={medicationFields}
               onChange={(event) => setMedicationFields(event.target.value)}
             />
+            <label htmlFor="research-fields">研究欄位 (RESEARCH_ANALYTICS)</label>
+            <textarea
+              id="research-fields"
+              value={researchFields}
+              onChange={(event) => setResearchFields(event.target.value)}
+            />
           </fieldset>
         </div>
       </div>
@@ -443,6 +505,10 @@ export function IssuerPanel({ client, issuerToken, baseUrl }) {
           <div className="qr-container" aria-label="發卡 QR Code">
             <QRCodeCanvas value={success.qr_payload} size={192} includeMargin />
           </div>
+          <p>
+            Retention 到期日：
+            {success.credential.retention_expires_at || '尚未建立（尚未被錢包接受）'}
+          </p>
           <pre>{JSON.stringify(success.credential, null, 2)}</pre>
         </div>
       ) : null}
