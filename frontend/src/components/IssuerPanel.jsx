@@ -109,7 +109,7 @@ function buildPayload({
               text: medication.display || undefined,
             },
             quantity_text: medication.quantityText,
-            days_supply: Number(medication.daysSupply) || 0,
+            days_supply: Math.max(1, Number(medication.daysSupply) || 0),
             performer: medication.performer
               ? {
                   system: 'did:example',
@@ -208,23 +208,23 @@ export function IssuerPanel({ client, issuerToken, baseUrl }) {
     setSuccess(null);
 
     const requestBody = {
-      issuer_id: issuerId,
+      issuerId: issuerId,
       ial,
-      primary_scope: primaryScope,
-      disclosure_policies: disclosurePolicies.map((policy) => ({
+      primaryScope: primaryScope,
+      disclosurePolicies: disclosurePolicies.map((policy) => ({
         scope: policy.scope,
         fields: policy.fields,
       })),
-      valid_for_minutes: Number(validMinutes) || 5,
-      holder_hint: holderHint || undefined,
+      validMinutes: Number(validMinutes) || 5,
+      holderHint: holderHint || undefined,
     };
 
     if (mode === 'WITH_DATA') {
-      requestBody.holder_did = holderDid || undefined;
+      requestBody.holderDid = holderDid || undefined;
       requestBody.payload = payloadTemplate;
     } else {
-      requestBody.payload_template = payloadTemplate || undefined;
-      requestBody.holder_did = holderDid || undefined;
+      requestBody.payloadTemplate = payloadTemplate || undefined;
+      requestBody.holderDid = holderDid || undefined;
     }
 
     const method = mode === 'WITH_DATA' ? 'issueWithData' : 'issueWithoutData';

@@ -70,10 +70,10 @@ api_v2 = APIRouter(prefix="/v2", tags=["MedSSI v2"])
 
 
 ISSUER_ACCESS_TOKEN = os.getenv(
-    "MEDSSI_ISSUER_TOKEN", "koreic2ZEFZ2J4oo2RaZu58yGVXiqDQy"
+    "MEDSSI_ISSUER_TOKEN", "8BpMc9xm2l1HCJxx4Fm4m5D7KTEElRWP" # change to your own token
 )
 VERIFIER_ACCESS_TOKEN = os.getenv(
-    "MEDSSI_VERIFIER_TOKEN", "J3LdHEiVxmHBYJ6iStnmATLblzRkz2AC"
+    "MEDSSI_VERIFIER_TOKEN", "J3LdHEiVxmHBYJ6iStnmATLblzRkz2AC" # change to your own token
 )
 WALLET_ACCESS_TOKEN = os.getenv("MEDSSI_WALLET_TOKEN", "wallet-sandbox-token")
 DEFAULT_ISSUER_ID = os.getenv(
