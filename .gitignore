@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+# Avoid virtual env
+.venv/
+# Avoid Node.js dependencies
+node_modules/
