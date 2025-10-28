@@ -156,7 +156,7 @@ export function VerifierPanel({ client, verifierToken }) {
         <div className="card">
           <label htmlFor="verifier-token">驗證端 Access Token</label>
           <input id="verifier-token" type="text" value={verifierToken} readOnly aria-readonly="true" />
-          <small className="helper">沙盒預設 verifier-sandbox-token。</small>
+          <small className="helper">沙盒預設 J3LdHEiVxmHBYJ6iStnmATLblzRkz2AC。</small>
 
           <label htmlFor="verifier-id">驗證者 DID</label>
           <input

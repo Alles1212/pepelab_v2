@@ -6,7 +6,7 @@ Usage:
 
 Defaults:
     base_url: http://localhost:8000
-    issuer_token: issuer-sandbox-token
+    issuer_token: koreic2ZEFZ2J4oo2RaZu58yGVXiqDQy
 
 The script issues a POST /v2/api/system/reset request with the supplied token
 so developers can quickly start from a clean slate before each demo.
@@ -22,7 +22,7 @@ from datetime import datetime
 
 def main() -> int:
     base_url = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000"
-    token = sys.argv[2] if len(sys.argv) > 2 else "issuer-sandbox-token"
+    token = sys.argv[2] if len(sys.argv) > 2 else "koreic2ZEFZ2J4oo2RaZu58yGVXiqDQy"
     url = base_url.rstrip("/") + "/v2/api/system/reset"
 
     request = urllib.request.Request(url, method="POST")

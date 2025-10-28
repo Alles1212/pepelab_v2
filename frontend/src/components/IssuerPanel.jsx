@@ -264,7 +264,7 @@ export function IssuerPanel({ client, issuerToken, baseUrl }) {
           <label htmlFor="issuer-token">發行端 Access Token</label>
           <input id="issuer-token" type="text" value={issuerToken} readOnly aria-readonly="true" />
           <small className="helper">
-            測試環境預設為 issuer-sandbox-token，正式系統請以 Vault 或 HSM 安全保存。
+            測試環境預設為 koreic2ZEFZ2J4oo2RaZu58yGVXiqDQy，正式系統請以 Vault 或 HSM 安全保存。
           </small>
 
           <label htmlFor="issuer-id">發行者 DID</label>

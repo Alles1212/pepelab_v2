@@ -150,6 +150,10 @@ class CredentialOffer(BaseModel):
         default_factory=dict,
         description="Field path to disclosed value mapping chosen by the holder",
     )
+    external_fields: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Alias field map used for MODA sandbox compatibility",
+    )
     issued_at: Optional[datetime] = None
     retention_expires_at: Optional[datetime] = None
     sealed_at: Optional[datetime] = None

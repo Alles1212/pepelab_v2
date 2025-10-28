@@ -56,7 +56,9 @@ Issuer (Hospital) ──QR──> Wallet (Patient) ──VP──> Verifier (Res
 
 這些相容端點仍套用相同的 Bearer token、5 分鐘有效期限與 IAL 驗證，方便與 React 示範介面或外部測試工具（Postman、Swagger UI）串接。【F:README.md†L52-L90】
 
-> ℹ️ 發行端端點需附帶 `Authorization: Bearer issuer-sandbox-token`（可用環境變數 `MEDSSI_ISSUER_TOKEN` 覆寫）；錢包端使用 `wallet-sandbox-token`；驗證端則使用 `verifier-sandbox-token`。
+- `vcUid` / `fields` 結構會自動轉換為 FHIR VC payload，同時保留 MODA 欄位別名（例如 `cond_code`、`cons_scope`），錢包與驗證端可直接沿用官方沙盒的欄位設定。
+
+> ℹ️ 發行端端點需附帶 `Authorization: Bearer koreic2ZEFZ2J4oo2RaZu58yGVXiqDQy`（可用環境變數 `MEDSSI_ISSUER_TOKEN` 覆寫）；錢包端使用 `wallet-sandbox-token`；驗證端則使用 `J3LdHEiVxmHBYJ6iStnmATLblzRkz2AC`。
 
 ## 快速操作
 1. **啟動後端**

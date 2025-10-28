@@ -9,7 +9,15 @@ import uuid
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
@@ -61,9 +69,16 @@ app.add_middleware(
 api_v2 = APIRouter(prefix="/v2", tags=["MedSSI v2"])
 
 
-ISSUER_ACCESS_TOKEN = os.getenv("MEDSSI_ISSUER_TOKEN", "issuer-sandbox-token")
-VERIFIER_ACCESS_TOKEN = os.getenv("MEDSSI_VERIFIER_TOKEN", "verifier-sandbox-token")
+ISSUER_ACCESS_TOKEN = os.getenv(
+    "MEDSSI_ISSUER_TOKEN", "koreic2ZEFZ2J4oo2RaZu58yGVXiqDQy"
+)
+VERIFIER_ACCESS_TOKEN = os.getenv(
+    "MEDSSI_VERIFIER_TOKEN", "J3LdHEiVxmHBYJ6iStnmATLblzRkz2AC"
+)
 WALLET_ACCESS_TOKEN = os.getenv("MEDSSI_WALLET_TOKEN", "wallet-sandbox-token")
+DEFAULT_ISSUER_ID = os.getenv(
+    "MEDSSI_DEFAULT_ISSUER_ID", "did:example:moda-issuer"
+)
 
 
 def _raise_problem(*, status: int, type_: str, title: str, detail: str) -> None:
@@ -204,6 +219,26 @@ class ResetResponse(BaseModel):
     timestamp: datetime
 
 
+class MODAIssuanceField(BaseModel):
+    ename: str
+    content: Optional[str] = ""
+
+
+class MODAIssuanceRequest(BaseModel):
+    vc_uid: str = Field(..., alias="vcUid")
+    issuance_date: Optional[date] = Field(None, alias="issuanceDate")
+    expired_date: Optional[date] = Field(None, alias="expiredDate")
+    fields: List[MODAIssuanceField] = Field(default_factory=list, alias="fields")
+    holder_did: Optional[str] = Field(None, alias="holderDid")
+    issuer_id: Optional[str] = Field(None, alias="issuerId")
+    transaction_id: Optional[str] = Field(None, alias="transactionId")
+    valid_minutes: Optional[int] = Field(None, alias="validMinutes")
+    ial: Optional[IdentityAssuranceLevel] = Field(None, alias="ial")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
 class GovIssueResponse(BaseModel):
     transaction_id: str = Field(..., alias="transactionId")
     qr_code: str = Field(..., alias="qrCode")
@@ -308,6 +343,59 @@ def _build_deep_link(
     if transaction_id:
         params.append(f"transactionId={transaction_id}")
     return f"{base_scheme}authorize?{'&'.join(params)}"
+
+
+def _normalize_vc_uid(vc_uid: str) -> str:
+    slug = vc_uid.lower()
+    if "_" in slug:
+        slug = slug.split("_")[-1]
+    return slug
+
+
+MODA_VC_SCOPE_MAP = {
+    "vc_cond": DisclosureScope.MEDICAL_RECORD,
+    "vc_algy": DisclosureScope.MEDICAL_RECORD,
+    "vc_pid": DisclosureScope.MEDICAL_RECORD,
+    "vc_cons": DisclosureScope.RESEARCH_ANALYTICS,
+    "vc_rx": DisclosureScope.MEDICATION_PICKUP,
+}
+
+
+MODA_SCOPE_DEFAULT_FIELDS = {
+    DisclosureScope.MEDICAL_RECORD: ["cond_code", "cond_display", "cond_onset"],
+    DisclosureScope.MEDICATION_PICKUP: [
+        "med_code",
+        "med_name",
+        "qty_value",
+        "qty_unit",
+        "pickup_deadline",
+    ],
+    DisclosureScope.RESEARCH_ANALYTICS: [
+        "cons_scope",
+        "cons_purpose",
+        "cons_path",
+        "cons_issuer",
+    ],
+}
+
+
+MODA_FIELD_TO_FHIR = {
+    "cond_code": "condition.code.coding[0].code",
+    "cond_display": "condition.code.coding[0].display",
+    "cond_onset": "condition.recordedDate",
+    "med_code": "medication_dispense[0].medicationCodeableConcept.coding[0].code",
+    "med_name": "medication_dispense[0].medicationCodeableConcept.coding[0].display",
+    "qty_value": "medication_dispense[0].days_supply",
+    "pickup_deadline": "medication_dispense[0].pickup_window_end",
+}
+
+
+MODA_SCOPE_ALIAS = {
+    "RESEARCH_INFO": DisclosureScope.RESEARCH_ANALYTICS.value,
+    "RESEARCH": DisclosureScope.RESEARCH_ANALYTICS.value,
+    "MEDICAL_INFO": DisclosureScope.MEDICAL_RECORD.value,
+    "MEDICATION": DisclosureScope.MEDICATION_PICKUP.value,
+}
 
 
 def _mock_credential_jwt(offer: CredentialOffer) -> str:
@@ -448,6 +536,148 @@ def _deep_merge(target: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, An
     return target
 
 
+def _payload_overrides_from_alias(alias_map: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    overrides: Dict[str, Any] = {}
+
+    def merge(update: Dict[str, Any]) -> None:
+        nonlocal overrides
+        overrides = _deep_merge(overrides, update)
+
+    if alias_map.get("cond_code"):
+        merge(
+            {
+                "condition": {
+                    "code": {
+                        "coding": [
+                            {
+                                "system": "http://hl7.org/fhir/sid/icd-10",
+                                "code": alias_map["cond_code"],
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+    if alias_map.get("cond_display"):
+        merge(
+            {
+                "condition": {
+                    "code": {
+                        "coding": [
+                            {
+                                "display": alias_map["cond_display"],
+                            }
+                        ],
+                        "text": alias_map["cond_display"],
+                    }
+                }
+            }
+        )
+    if alias_map.get("cond_onset"):
+        merge({"condition": {"recordedDate": alias_map["cond_onset"]}})
+
+    if alias_map.get("med_code"):
+        merge(
+            {
+                "medication_dispense": [
+                    {
+                        "medicationCodeableConcept": {
+                            "coding": [
+                                {
+                                    "system": "http://www.whocc.no/atc",
+                                    "code": alias_map["med_code"],
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        )
+    if alias_map.get("med_name"):
+        merge(
+            {
+                "medication_dispense": [
+                    {
+                        "medicationCodeableConcept": {
+                            "coding": [
+                                {
+                                    "display": alias_map["med_name"],
+                                }
+                            ],
+                            "text": alias_map["med_name"],
+                        }
+                    }
+                ]
+            }
+        )
+
+    qty_value = alias_map.get("qty_value")
+    qty_unit = alias_map.get("qty_unit")
+    quantity_text: Optional[str] = None
+    if qty_value:
+        try:
+            days_supply = int(qty_value)
+        except ValueError:
+            days_supply = None
+        merge(
+            {
+                "medication_dispense": [
+                    {
+                        "days_supply": days_supply if days_supply is not None else qty_value,
+                    }
+                ]
+            }
+        )
+        quantity_text = qty_value
+    if qty_unit:
+        quantity_text = f"{qty_value or ''} {qty_unit}".strip()
+    if quantity_text:
+        merge(
+            {
+                "medication_dispense": [
+                    {
+                        "quantity_text": quantity_text,
+                    }
+                ]
+            }
+        )
+
+    if alias_map.get("pickup_deadline"):
+        merge(
+            {
+                "medication_dispense": [
+                    {
+                        "pickup_window_end": alias_map["pickup_deadline"],
+                    }
+                ]
+            }
+        )
+
+    return overrides or None
+
+
+def _expand_aliases(alias_map: Dict[str, str]) -> Dict[str, str]:
+    expanded = dict(alias_map)
+
+    def copy_if_missing(source: str, target: str) -> None:
+        if source in alias_map and target not in expanded:
+            expanded[target] = alias_map[source]
+
+    copy_if_missing("med_code", "medication_list[0].medication_code")
+    copy_if_missing("med_name", "medication_list[0].medication_name")
+    copy_if_missing("qty_value", "medication_list[0].dosage")
+    copy_if_missing("pickup_deadline", "pickup_info.pickup_deadline")
+    copy_if_missing("cons_scope", "consent.scope")
+    copy_if_missing("cons_purpose", "consent.purpose")
+    copy_if_missing("cons_issuer", "consent.issuer")
+    copy_if_missing("cons_path", "consent.path")
+    copy_if_missing("pid_hash", "pid_info.pid_hash")
+    copy_if_missing("pid_name", "pid_info.pid_name")
+    copy_if_missing("pid_birth", "pid_info.pid_birth")
+
+    return expanded
+
+
 def _coerce_payload(
     payload: Optional[Union[CredentialPayload, Dict[str, Any]]]
 ) -> CredentialPayload:
@@ -482,6 +712,8 @@ def _issue_offer(
     payload: Optional[CredentialPayload] = None,
     payload_template: Optional[CredentialPayload] = None,
     transaction_id: Optional[str] = None,
+    selected_disclosures: Optional[Dict[str, str]] = None,
+    external_fields: Optional[Dict[str, str]] = None,
 ) -> Tuple[CredentialOffer, str]:
     offer = _create_offer(
         issuer_id=issuer_id,
@@ -495,6 +727,8 @@ def _issue_offer(
         payload=payload,
         payload_template=payload_template,
         transaction_id=transaction_id,
+        selected_disclosures=selected_disclosures,
+        external_fields=external_fields,
     )
     qr_payload = _build_qr_payload(offer.qr_token, "credential")
     return offer, qr_payload
@@ -513,6 +747,8 @@ def _create_offer(
     payload: Optional[CredentialPayload] = None,
     payload_template: Optional[CredentialPayload] = None,
     transaction_id: Optional[str] = None,
+    selected_disclosures: Optional[Dict[str, str]] = None,
+    external_fields: Optional[Dict[str, str]] = None,
 ) -> CredentialOffer:
     now = datetime.utcnow()
     credential_id = f"cred-{uuid.uuid4().hex}"
@@ -538,6 +774,8 @@ def _create_offer(
         holder_hint=holder_hint,
         payload=payload,
         payload_template=payload_template,
+        selected_disclosures=selected_disclosures or {},
+        external_fields=external_fields or {},
     )
     store.persist_credential(offer)
     return offer
@@ -594,6 +832,19 @@ def _resolve_payload_value(payload: Optional[CredentialPayload], path: str) -> O
     if isinstance(current, dict):
         return str(current)
     return None
+
+
+def _resolve_field_value(credential: CredentialOffer, field: str) -> Optional[str]:
+    if field in credential.external_fields:
+        value = credential.external_fields[field]
+        if value not in (None, ""):
+            return str(value)
+    fhir_path = MODA_FIELD_TO_FHIR.get(field)
+    if fhir_path:
+        resolved = _resolve_payload_value(credential.payload, fhir_path)
+        if resolved is not None:
+            return resolved
+    return _resolve_payload_value(credential.payload, field)
 
 
 def _select_allowed_fields(offer: CredentialOffer, disclosures: Dict[str, str]) -> Dict[str, str]:
@@ -672,6 +923,92 @@ def _issue_from_template_request(
     )
 
 
+def _scope_for_moda_vc(vc_uid: str) -> DisclosureScope:
+    slug = _normalize_vc_uid(vc_uid)
+    return MODA_VC_SCOPE_MAP.get(slug, DisclosureScope.MEDICAL_RECORD)
+
+
+def _issue_from_moda_request(request: MODAIssuanceRequest) -> Tuple[CredentialOffer, str]:
+    scope = _scope_for_moda_vc(request.vc_uid)
+    ial = request.ial or IdentityAssuranceLevel.NHI_CARD_PIN
+    holder_did = request.holder_did or "did:example:patient-demo"
+    issuer_id = request.issuer_id or DEFAULT_ISSUER_ID
+    valid_minutes = request.valid_minutes or 5
+    valid_minutes = max(1, min(10, valid_minutes))
+
+    alias_map = _expand_aliases(
+        {field.ename: field.content or "" for field in request.fields if field.ename}
+    )
+    policy_fields = list(dict.fromkeys(alias_map.keys()))
+    if not policy_fields:
+        policy_fields = MODA_SCOPE_DEFAULT_FIELDS.get(scope, ["cond_code"])
+
+    payload_overrides = _payload_overrides_from_alias(alias_map)
+    payload = _coerce_payload(payload_overrides)
+
+    policies = [
+        DisclosurePolicy(
+            scope=scope,
+            fields=policy_fields,
+            description="MODA 沙盒欄位設定",
+        )
+    ]
+
+    return _issue_offer(
+        issuer_id=issuer_id,
+        primary_scope=scope,
+        ial=ial,
+        mode=IssuanceMode.WITH_DATA,
+        disclosure_policies=policies,
+        valid_for_minutes=valid_minutes,
+        holder_did=holder_did,
+        holder_hint=None,
+        payload=payload,
+        transaction_id=request.transaction_id,
+        selected_disclosures=alias_map,
+        external_fields=alias_map,
+    )
+
+
+def _normalize_scope_entries(raw_policies: Any) -> Any:
+    if not isinstance(raw_policies, list):
+        return raw_policies
+    for item in raw_policies:
+        if not isinstance(item, dict):
+            continue
+        scope_value = item.get("scope")
+        if isinstance(scope_value, str):
+            normalized = MODA_SCOPE_ALIAS.get(scope_value.upper(), scope_value.upper())
+            item["scope"] = normalized
+    return raw_policies
+
+
+def _issue_with_data_from_payload(payload: Dict[str, Any]) -> Tuple[CredentialOffer, str]:
+    try:
+        if "disclosurePolicies" in payload:
+            payload["disclosurePolicies"] = _normalize_scope_entries(payload["disclosurePolicies"])
+        if "vcUid" in payload:
+            moda_request = MODAIssuanceRequest.parse_obj(payload)
+            return _issue_from_moda_request(moda_request)
+        request = IssuanceWithDataRequest.parse_obj(payload)
+        return _issue_from_data_request(request)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=json.loads(exc.json())) from exc
+
+
+def _issue_template_from_payload(payload: Dict[str, Any]) -> Tuple[CredentialOffer, str]:
+    try:
+        if "disclosurePolicies" in payload:
+            payload["disclosurePolicies"] = _normalize_scope_entries(payload["disclosurePolicies"])
+        if "vcUid" in payload:
+            moda_request = MODAIssuanceRequest.parse_obj(payload)
+            return _issue_from_moda_request(moda_request)
+        request = IssuanceWithoutDataRequest.parse_obj(payload)
+        return _issue_from_template_request(request)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=json.loads(exc.json())) from exc
+
+
 def _build_issue_response(offer: CredentialOffer, qr_payload: str) -> GovIssueResponse:
     return GovIssueResponse(
         transaction_id=offer.transaction_id,
@@ -737,8 +1074,8 @@ api_public = APIRouter(prefix="/api", tags=["MODA Sandbox compatibility"])
     status_code=201,
     dependencies=[Depends(require_issuer_token)],
 )
-def gov_issue_with_data(request: IssuanceWithDataRequest) -> GovIssueResponse:
-    offer, qr_payload = _issue_from_data_request(request)
+def gov_issue_with_data(payload: Dict[str, Any] = Body(...)) -> GovIssueResponse:
+    offer, qr_payload = _issue_with_data_from_payload(payload)
     return _build_issue_response(offer, qr_payload)
 
 
@@ -748,8 +1085,8 @@ def gov_issue_with_data(request: IssuanceWithDataRequest) -> GovIssueResponse:
     status_code=201,
     dependencies=[Depends(require_issuer_token)],
 )
-def gov_issue_medical_card(request: IssuanceWithDataRequest) -> GovIssueResponse:
-    offer, qr_payload = _issue_from_data_request(request)
+def gov_issue_medical_card(payload: Dict[str, Any] = Body(...)) -> GovIssueResponse:
+    offer, qr_payload = _issue_with_data_from_payload(payload)
     return _build_issue_response(offer, qr_payload)
 
 
@@ -759,8 +1096,8 @@ def gov_issue_medical_card(request: IssuanceWithDataRequest) -> GovIssueResponse
     status_code=201,
     dependencies=[Depends(require_issuer_token)],
 )
-def gov_issue_without_data(request: IssuanceWithoutDataRequest) -> GovIssueResponse:
-    offer, qr_payload = _issue_from_template_request(request)
+def gov_issue_without_data(payload: Dict[str, Any] = Body(...)) -> GovIssueResponse:
+    offer, qr_payload = _issue_template_from_payload(payload)
     return _build_issue_response(offer, qr_payload)
 
 
@@ -1204,7 +1541,7 @@ def submit_presentation(payload: VerificationSubmission) -> RiskInsightResponse:
         presented_value = payload.disclosed_fields.get(field)
         if presented_value is None:
             continue
-        actual_value = _resolve_payload_value(credential.payload, field)
+        actual_value = _resolve_field_value(credential, field)
         if actual_value is not None and str(presented_value) != str(actual_value):
             _raise_problem(
                 status=400,
